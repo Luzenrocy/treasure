@@ -1,0 +1,83 @@
+/* Ruhua Simeng 字体：仅供系统设置页 group-title 使用 */
+@font-face {
+    font-family: "Ruhua Simeng";
+    src: url("/ruhua-simeng-xingkai.ttf") format("truetype");
+    font-display: swap;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
+:root {
+    --treasure-side-backgroud-color: #3d3450;
+    --treasure-bg-tabs: #ece3d3;
+    --treasure-background-color: #f5efe4;
+
+    --treasure-side-text: #c9b8d9;
+    --treasure-side-hover-bg: rgba(154, 132, 189, 0.22);
+    --treasure-side-active-bg: rgba(154, 132, 189, 0.34);
+    --treasure-side-accent: #b69cff;
+
+    --treasure-tab-text: #5c5347;
+    --treasure-tab-text-active: #7656a7;
+    --treasure-tab-accent: #e8c98a;
+
+    --treasure-border-color: rgba(126, 108, 87, 0.12);
+
+    /* Element Plus danger/error 色覆盖为 Treasure 暖调危险色 */
+    --el-color-danger: #d36c6c;
+    --el-color-danger-light-3: #e09898;
+    --el-color-danger-light-5: #e9b6b6;
+    --el-color-danger-light-7: #f2d3d3;
+    --el-color-danger-light-8: #f6e2e2;
+    --el-color-danger-light-9: #fbf0f0;
+    --el-color-danger-dark-2: #a95656;
+    --el-color-error: #d36c6c;
+    --el-color-error-light-3: #e09898;
+    --el-color-error-light-5: #e9b6b6;
+    --el-color-error-light-7: #f2d3d3;
+    --el-color-error-light-8: #f6e2e2;
+    --el-color-error-light-9: #fbf0f0;
+    --el-color-error-dark-2: #a95656;
+    --side-menu-collapse-width: 64px;
+    --side-menu-extend-width: 64px;
+
+    /* Element Plus el-tag--info 配色适配为 Treasure 主题色 */
+    --el-color-info-light-9: var(--treasure-border-color);
+    --el-color-info-light-8: var(--treasure-border-color);
+    --el-color-info: var(--treasure-side-accent);
+
+}
+
+.end-start {
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-end;
+    text-align: right;
+}
+
+/* el-time-select 选中项 tag 背景色全局适配 */
+html body .el-time-select .el-select__selected-item .el-tag,
+html body .el-time-select .el-select__selected-item .el-tag.el-tag--info {
+  --el-tag-bg-color: var(--treasure-border-color) !important;
+  --el-tag-border-color: var(--treasure-border-color) !important;
+  --el-tag-hover-color: var(--treasure-side-accent) !important;
+  background-color: var(--treasure-border-color) !important;
+  border-color: var(--treasure-border-color) !important;
+  color: var(--el-text-color-regular) !important;
+}
+html body .el-time-select .el-select__selected-item .el-tag__close {
+  background-color: var(--treasure-background-color) !important;
+  color: var(--el-text-color-regular) !important;
+}
+html body .el-time-select .el-select__selected-item .el-tag__close:hover {
+  background-color: var(--treasure-side-accent) !important;
+  color: #fff !important;
+}
