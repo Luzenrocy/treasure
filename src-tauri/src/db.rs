@@ -1,4 +1,5 @@
 use std::sync::{Mutex, Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::State;
 use rusqlite::{Connection, Result as RusResult, Row, OptionalExtension, params_from_iter};
 use tokio::task;
@@ -10,9 +11,27 @@ use tracing::{debug, info};
 
 const DEFAULT_TIMEOUT_MS: u64 = 15000;
 
+struct OpsGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl OpsGuard {
+    fn new(counter: Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self { counter }
+    }
+}
+
+impl Drop for OpsGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 pub struct Database {
     write_conn: Arc<Mutex<Connection>>,
     timeout_ms: u64,
+    ops_counter: Arc<AtomicUsize>,
 }
 
 impl Clone for Database {
@@ -20,6 +39,25 @@ impl Clone for Database {
         Database {
             write_conn: Arc::clone(&self.write_conn),
             timeout_ms: self.timeout_ms,
+            ops_counter: Arc::clone(&self.ops_counter),
+        }
+    }
+}
+
+impl Drop for Database {
+    fn drop(&mut self) {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(30);
+
+        while self.ops_counter.load(Ordering::SeqCst) > 0 {
+            if start.elapsed() > timeout {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        if let Ok(conn) = self.write_conn.lock() {
+            let _ = conn.execute_batch("PRAGMA optimize");
         }
     }
 }
@@ -60,10 +98,15 @@ impl Database {
              PRAGMA busy_timeout={};",
             busy_timeout_ms
         ))?;
-        Ok(Self { write_conn: Arc::new(Mutex::new(conn)), timeout_ms: DEFAULT_TIMEOUT_MS })
+        Ok(Self {
+            write_conn: Arc::new(Mutex::new(conn)),
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+            ops_counter: Arc::new(AtomicUsize::new(0)),
+        })
     }
 
     pub fn query_value(&self, sql: &str, ps: rusqlite::ParamsFromIter<std::vec::IntoIter<rusqlite::types::Value>>) -> RusResult<Vec<Value>> {
+        let _guard = OpsGuard::new(Arc::clone(&self.ops_counter));
         let conn = self.write_conn.lock().unwrap();
         let mut stmt = conn.prepare(sql)?;
         let mut rows = stmt.query(ps)?;
@@ -75,6 +118,7 @@ impl Database {
     }
 
     pub fn execute_value(&self, sql: &str, ps: rusqlite::ParamsFromIter<std::vec::IntoIter<rusqlite::types::Value>>) -> RusResult<Value> {
+        let _guard = OpsGuard::new(Arc::clone(&self.ops_counter));
         let conn = self.write_conn.lock().unwrap();
         let rows_affected = conn.execute(sql, ps)? as u64;
         let last_insert_id = conn.last_insert_rowid();
@@ -82,11 +126,11 @@ impl Database {
     }
 
     pub fn transaction_value(&self, sqls: &[String], all_params: &[Vec<Value>]) -> RusResult<u64> {
+        let _guard = OpsGuard::new(Arc::clone(&self.ops_counter));
         let mut conn = self.write_conn.lock().unwrap();
         let tx = conn.transaction()?;
         let mut executed = 0u64;
         for (i, sql) in sqls.iter().enumerate() {
-            // map(to_rl) → Iterator<Item = rl::Value>，rl::Value: ToSql
             let ps = params_from_iter(
                 all_params.get(i).map(|v| v.as_slice()).unwrap_or(&[])
                     .iter()
@@ -100,6 +144,7 @@ impl Database {
     }
 
     pub fn readonly_transaction_value(&self, sqls: &[String], all_params: &[Vec<Value>]) -> RusResult<Vec<Value>> {
+        let _guard = OpsGuard::new(Arc::clone(&self.ops_counter));
         let conn = self.write_conn.lock().unwrap();
         conn.execute("BEGIN", [])?;
         let mut all_rows = Vec::new();
@@ -120,6 +165,7 @@ impl Database {
     }
 
     pub fn run_migrations(&self) -> RusResult<i64> {
+        let _guard = OpsGuard::new(Arc::clone(&self.ops_counter));
         let mut conn = self.write_conn.lock().unwrap();
         conn.execute_batch("PRAGMA busy_timeout=10000")?;
         conn.execute(

@@ -372,6 +372,15 @@ pub fn run() {
             app.manage(database);
             app.manage(log_engine);
             
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Destroyed = event {
+                        handle.exit(0);
+                    }
+                });
+            }
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
