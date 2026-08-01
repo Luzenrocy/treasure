@@ -374,6 +374,8 @@ if (r.submenuLabel) {
 </template>
 
 <style lang="scss" scoped>
+@import url('https://fonts.googleapis.com/css2?family=Pinyon+Script&display=swap');
+
 .main-container {
   width: 100vw;
   height: 100vh;
@@ -423,27 +425,34 @@ if (r.submenuLabel) {
           display: flex;
           align-items: center;
           justify-content: center;
+          gap: 5px;
           user-select: none;
           overflow: hidden;
 
           .brand-logo {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
             flex-shrink: 0;
             color: var(--treasure-side-text);
             filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+            transform: translateY(-3px);
           }
 
           .brand-text {
-            font-family: 'Alex Brush', cursive;
-            font-size: 22px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            color:#c9a04e;
+            font-family: 'Pinyon Script', cursive;
+            font-size: 28px;
+            font-weight: 400;
+            line-height: 1;
+            letter-spacing: 0.2px;
+            background: linear-gradient(100deg, #fff0bd 0%, #e8bd61 38%, #c99546 66%, #c5a8dc 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
             white-space: nowrap;
-            opacity: 0.92;
-            transform: skewX(-30deg);
+            opacity: 1;
+            transform: translateY(-2px);
             display: inline-block;
+            text-shadow: 0 1px 9px rgba(232, 201, 138, 0.12);
           }
         }
       }
