@@ -195,8 +195,6 @@ Treasure 采用“**暖调毛玻璃文人雅致**”设计语言：温暖的米�
 │   ├── src/db.rs               # SQLite、迁移、事务与 Tauri commands
 │   ├── src/lib.rs              # 自定义协议、SQL 解析校验与原生命令
 │   └── tauri.conf.json         # 窗口、构建与资源协议配置
-├── SDK-HOST.md                 # 宿主桥接协议参考
-├── SDK-PLUGIN.md               # 工具接入协议参考
 └── package.json
 ```
 
@@ -251,8 +249,9 @@ Treasure 由三个独立仓库构成，各自保持清晰职责：
 ## 文档与许可证
 
 - [Tauri v2 文档](https://v2.tauri.app)
-- [宿主桥接协议](SDK-HOST.md)
-- [工具接入协议](SDK-PLUGIN.md)
+- [Treasure SDK API 参考](https://github.com/Luzenrocy/treasure-sdk/blob/main/docs/API-REFERENCE.md)
+- [Treasure 桥接协议](https://github.com/Luzenrocy/treasure-sdk/blob/main/docs/BRIDGE-PROTOCOL.md)
+- [Treasure 插件研发指南](https://github.com/Luzenrocy/treasure-plugins/blob/main/docs/PLUGIN-DEVELOPMENT-GUIDE.md)
 - [Apache License 2.0](LICENSE)
 
 欢迎通过 Issue 或 Pull Request 参与讨论与改进。在提交前，请说明改动是否影响宿主 UI、数据迁移、桥接协议或安全边界。

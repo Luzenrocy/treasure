@@ -8,9 +8,8 @@
  *   4. 将结果通过 `treasure-db-response` 回传给插件
  *
  * 通信协议：
- *   - 请求格式  → SDK-HOST.md 2.1 节
- *   - 响应格式  → SDK-HOST.md 2.2 节
- *   - Action 表 → SDK-HOST.md 第三章
+ *   - 请求与响应格式 → treasure-sdk/docs/BRIDGE-PROTOCOL.md
+ *   - Action 约定     → treasure-sdk/docs/BRIDGE-PROTOCOL.md
  *
  * 安全校验链路：
  *   ① origin 白名单校验（仅允许 plugin://localhost 和 http://localhost）
