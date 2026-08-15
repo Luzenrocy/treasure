@@ -63,6 +63,11 @@ export async function query<T = any>(sql: string, params: any[] = []): Promise<R
 /** 执行写操作（INSERT / UPDATE / DELETE） */
 export async function execute(sql: string, params: any[] = []): Promise<Response> {
     try {
+        // SQLite RETURNING yields rows and must not be discarded by the write path.
+        if (/\bRETURNING\b/i.test(sql)) {
+            const rows = await invoke<any[]>('db_query', { sql, params });
+            return Response.ok({ lastInsertId: 0, rowsAffected: rows.length, rows });
+        }
         const res = await invoke<{ rowsAffected: number; lastInsertId: number }>('db_execute', { sql, params });
         return Response.ok({ lastInsertId: res.lastInsertId || 0, rowsAffected: res.rowsAffected || 0 });
     } catch (e) {
@@ -87,8 +92,8 @@ export async function transaction(operations: Array<{ sql: string; params?: any[
     try {
         const sqls = operations.map(op => op.sql);
         const allParams = operations.map(op => (op.params || []));
-        const res = await invoke<{ executed: number }>('db_transaction', { sqls, allParams });
-        return Response.ok({ executed: res.executed || 0 });
+        const res = await invoke<Array<{ affectedRows: number; lastInsertId?: number }>>('db_transaction', { sqls, allParams });
+        return Response.ok(res);
     } catch (e) {
         const msg = normalizeError(e);
         return Response.error(`事务执行失败: ${msg}`);

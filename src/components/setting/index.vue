@@ -129,6 +129,7 @@
 <script lang="ts">
 import { defineComponent } from 'vue';
 import { getSettings, saveSetting } from '@/sql/service';
+import { selectPluginStorageDirectory } from '@/sql/platformService';
 import { ElMessage } from 'element-plus';
 import {useMenuStore} from "@/store/menu";
 import { open } from '@tauri-apps/plugin-dialog';
@@ -272,7 +273,13 @@ export default defineComponent({
         });
 
         if (selected && typeof selected === 'string') {
-          item.param_value = selected;
+          if (item.param_key === 'storage_dir') {
+            const bound = await selectPluginStorageDirectory(item.plugin_code, item.param_key, selected);
+            if (bound.code !== 1) throw new Error(bound.msg || '目录授权绑定失败');
+            item.param_value = bound.data.path;
+            item.directory_display_name = bound.data.name;
+            item.directory_status = 'active';
+          } else item.param_value = selected;
         }
       } catch (error) {
         console.error('选择目录失败:', error);
@@ -282,7 +289,7 @@ export default defineComponent({
     async saveAllSettings() {
       this.saving = true;
       try {
-        const normalizedSettings = this.settings.map((s: any) => {
+        const normalizedSettings = this.settings.filter((s: any) => s.param_key !== 'storage_dir').map((s: any) => {
           if (s.param_type === 'time') {
             const props = this.safeJsonParse(s.param_properties, {});
             if (props.multiple && Array.isArray(s.param_value)) {

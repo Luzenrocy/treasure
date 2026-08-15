@@ -2,12 +2,22 @@
     <div class="plugin-manager-page">
       <el-header height="40px" class="search-header">
         <el-input v-model="searchKeyword" placeholder="请输入插件名称或中文名称" style="width: 194px; margin-right: 20px" />
-        <el-button type="primary" @click="handleQuery">查询</el-button>
-        <el-button type="primary" @click="handleImport">导入</el-button>
-        <el-button v-if="selectedPlugins.length > 0" type="danger" @click="batchDeleteDialogVisible = true">
-          删除({{ selectedPlugins.length }})
-        </el-button>
-        <el-button v-if="debugEnabled" type="warning" @click="debugDialogVisible = true">注册调试插件</el-button>
+        <div class="toolbar-actions">
+          <el-button type="primary" @click="handleQuery">查询</el-button>
+          <el-dropdown @command="handleImport">
+            <el-button type="primary">导入插件包</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="zip">导入 ZIP 文件</el-dropdown-item>
+                <el-dropdown-item command="directory">导入目录包</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-button v-if="selectedPlugins.length > 0" type="danger" @click="batchDeleteDialogVisible = true">
+            删除({{ selectedPlugins.length }})
+          </el-button>
+          <el-button v-if="debugEnabled" type="warning" @click="debugDialogVisible = true">注册调试插件</el-button>
+        </div>
         <el-button-group style="margin-left: auto">
           <el-button :type="viewType === 'list' ? 'primary' : 'default'" @click="viewType = 'list'">列表视图</el-button>
           <el-button :type="viewType === 'card' ? 'primary' : 'default'" @click="viewType = 'card'">卡片视图</el-button>
@@ -66,14 +76,14 @@
 
     <el-dialog v-model="debugDialogVisible" title="注册调试插件" @open="debugForm.debugUrl = ''">
       <el-form :model="debugForm" label-width="auto">
-        <el-form-item label="调试地址">
+        <el-form-item label="插件开发地址">
           <el-input v-model="debugForm.debugUrl" placeholder="http://localhost:5173" />
         </el-form-item>
-        <p class="debug-hint">注册后将自动从调试地址拉取 manifest.json 解析插件信息</p>
+        <p class="debug-hint">注册后将从开发服务的 /treasure-manifest.json 读取插件信息</p>
       </el-form>
       <template #footer>
         <el-button @click="debugDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="debugLoading" @click="registerDebugPlugin(); debugDialogVisible = false">注册</el-button>
+        <el-button type="primary" :loading="debugLoading" @click="registerDebugPlugin">注册</el-button>
       </template>
     </el-dialog>
 </template>
@@ -93,6 +103,7 @@ import { validateDebugUrl } from '@/utils/debugValidator';
 import { useMenuStore } from '@/store/menu';
 import { useTabsStore } from '@/store/tabs';
 import { logEvent } from '@/utils/logger';
+import { findPluginPackageRoot } from './packageImport';
 
 export default defineComponent({
   name: "pluginManager",
@@ -164,10 +175,7 @@ export default defineComponent({
 
       this.debugLoading = true;
       try {
-        const pluginCode = (await (await fetch(debugUrl.replace(/\/+$/, '') + '/treasure-manifest.json')).json()).name;
-        await logEvent('info', 'sys', 'register_debug_plugin', { pluginCode, debugUrl });
-
-        // 从调试服务器拉取 manifest.json 获取插件信息
+        // 从插件开发服务拉取 manifest.json 获取插件信息
         const manifestUrl = debugUrl.replace(/\/+$/, '') + '/treasure-manifest.json';
         const manifestResp = await fetch(manifestUrl);
         if (!manifestResp.ok) {
@@ -201,6 +209,7 @@ export default defineComponent({
           ElMessage.error(`manifest 校验失败: ${validation.errors.join('; ')}`);
           return;
         }
+        await logEvent('info', 'sys', 'register_debug_plugin', { pluginCode: pluginCodeFromManifest, debugUrl });
 
         // 拉取所有版本化 init 脚本（可选）
         const initScripts: Record<string, string> = {};
@@ -234,6 +243,7 @@ export default defineComponent({
         }
 
         this.debugForm = { debugUrl: '' };
+        this.debugDialogVisible = false;
         useMenuStore().fetchMenus();
         ElMessage.success(`调试插件 "${pluginAlias}" 注册成功（已按 manifest 创建参数与数据表）`);
         await this.handleQuery();
@@ -253,7 +263,7 @@ export default defineComponent({
         const manifestUrl = debugUrl.replace(/\/+$/, '') + '/treasure-manifest.json';
         const manifestResp = await fetch(manifestUrl);
         if (!manifestResp.ok) {
-          ElMessage.error('无法获取 manifest.json，请确认调试服务器已启动');
+          ElMessage.error('无法获取 manifest.json，请确认插件开发服务已启动');
           return;
         }
         const raw = await manifestResp.text();
@@ -291,55 +301,46 @@ export default defineComponent({
       this.currentPlugin = plugin
       this.deleteDialogVisible =true
     },
-    async handleImport() {
+    async handleImport(kind: 'zip' | 'directory') {
       try {
-        const selected = await open({
-          multiple: false,
-          title: '选择插件 .zip 文件',
-          filters: [
-            { name: '插件包', extensions: ['zip'] },
-          ],
-        });
+        const selected = await open(kind === 'zip'
+          ? {
+              multiple: false,
+              title: '选择插件 ZIP 文件',
+              filters: [{ name: '插件包', extensions: ['zip'] }],
+            }
+          : {
+              multiple: false,
+              directory: true,
+              title: '选择插件目录包',
+            });
         if (!selected || typeof selected !== 'string') return;
 
-        const isZip = selected.toLowerCase().endsWith('.zip');
-        if (!isZip) {
-          ElMessage.error('仅支持导入 .zip 插件包');
+        if (kind === 'zip' && !selected.toLowerCase().endsWith('.zip')) {
+          ElMessage.error('请选择 .zip 插件包');
           return;
         }
         let pluginDir = '';
         let tmpExtractDir = '';
 
-        const appDataPath = await appDataDir();
-        const zipBase = selected.split('/').pop()!.replace(/\.zip$/i, '');
-        const tmpRoot = `${appDataPath}/tmp`;
-        await mkdir(tmpRoot, { recursive: true });
-        tmpExtractDir = `${tmpRoot}/${Date.now()}_${zipBase}`;
-        await invoke('extract_zip', { zipPath: selected, targetDir: tmpExtractDir });
-        const entries = await readDir(tmpExtractDir);
-        const manifestCandidate = entries.find(e => e.name === 'manifest.json');
-        if (manifestCandidate) {
-          pluginDir = tmpExtractDir;
+        if (kind === 'zip') {
+          const appDataPath = await appDataDir();
+          const zipBase = selected.split('/').pop()!.replace(/\.zip$/i, '');
+          const tmpRoot = `${appDataPath}/tmp`;
+          await mkdir(tmpRoot, { recursive: true });
+          tmpExtractDir = `${tmpRoot}/${Date.now()}_${zipBase}`;
+          await invoke('extract_zip', { zipPath: selected, targetDir: tmpExtractDir });
         } else {
-          let found = false;
-          for (const entry of entries) {
-            if (entry.isDirectory) {
-              const subManifest = `${tmpExtractDir}/${entry.name}/manifest.json`;
-              if (await exists(subManifest)) {
-                pluginDir = `${tmpExtractDir}/${entry.name}`;
-                found = true;
-                break;
-              }
-            }
-          }
-          if (!found) {
-            ElMessage.error('zip 包内未找到 manifest.json');
-            if (tmpExtractDir) {
-              await invoke('delete_directory', { path: tmpExtractDir });
-            }
-            return;
-          }
+          pluginDir = selected;
         }
+
+        const root = await findPluginPackageRoot(pluginDir || tmpExtractDir, { exists, readDir });
+        if (!root.ok) {
+          ElMessage.error(root.error);
+          if (tmpExtractDir) await invoke('delete_directory', { path: tmpExtractDir });
+          return;
+        }
+        pluginDir = root.value;
 
         const manifestPath = `${pluginDir}/manifest.json`;
         if (!(await exists(manifestPath))) {
@@ -576,6 +577,11 @@ export default defineComponent({
   padding: 0 5px !important;
   flex-shrink: 0;
 }
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .toolbar {
   display: flex;
   justify-content: space-between;
@@ -609,17 +615,17 @@ export default defineComponent({
   color: #fff;
   font-weight: 500;
   border-radius: 8px;
-  box-shadow: 0 3px 10px rgba(139, 108, 193, 0.22);
+  box-shadow: none;
   transition: all 0.25s ease;
 }
 :deep(.search-header .el-button--primary:not(.el-button--danger):not(.el-button--warning):hover) {
   background: linear-gradient(135deg, #c0a8ec 0%, #9b7cd0 100%);
-  box-shadow: 0 5px 14px rgba(139, 108, 193, 0.32);
+  box-shadow: none;
   transform: translateY(-1px);
 }
 :deep(.search-header .el-button--primary:not(.el-button--danger):not(.el-button--warning):active) {
   background: linear-gradient(135deg, #a085d6 0%, #7a5cb2 100%);
-  box-shadow: 0 2px 6px rgba(139, 108, 193, 0.28);
+  box-shadow: none;
   transform: translateY(0);
 }
 
@@ -630,17 +636,17 @@ export default defineComponent({
   color: #fff;
   font-weight: 500;
   border-radius: 8px;
-  box-shadow: 0 3px 10px rgba(214, 167, 88, 0.22);
+  box-shadow: none;
   transition: all 0.25s ease;
 }
 :deep(.search-header .el-button--warning:hover) {
   background: linear-gradient(135deg, #f5d9a2 0%, #e0b568 100%);
-  box-shadow: 0 5px 14px rgba(214, 167, 88, 0.32);
+  box-shadow: none;
   transform: translateY(-1px);
 }
 :deep(.search-header .el-button--warning:active) {
   background: linear-gradient(135deg, #e0be7e 0%, #c89a4a 100%);
-  box-shadow: 0 2px 6px rgba(214, 167, 88, 0.28);
+  box-shadow: none;
   transform: translateY(0);
 }
 
@@ -651,17 +657,17 @@ export default defineComponent({
   color: #fff;
   font-weight: 500;
   border-radius: 8px;
-  box-shadow: 0 3px 10px rgba(201, 94, 94, 0.22);
+  box-shadow: none;
   transition: all 0.25s ease;
 }
 :deep(.search-header .el-button--danger:hover) {
   background: linear-gradient(135deg, #e99292 0%, #d36c6c 100%);
-  box-shadow: 0 5px 14px rgba(201, 94, 94, 0.32);
+  box-shadow: none;
   transform: translateY(-1px);
 }
 :deep(.search-header .el-button--danger:active) {
   background: linear-gradient(135deg, #d06a6a 0%, #b84e4e 100%);
-  box-shadow: 0 2px 6px rgba(201, 94, 94, 0.28);
+  box-shadow: none;
   transform: translateY(0);
 }
 

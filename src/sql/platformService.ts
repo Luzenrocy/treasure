@@ -81,6 +81,7 @@ export async function deletePluginById(pluginId: number): Promise<Response> {
     if (plugin.code === 1 && plugin.data[0]?.plugin_code) {
         await execDestroyScript(plugin.data[0].plugin_code);
         await cleanupPluginTables(plugin.data[0].plugin_code);
+        await cleanupPluginPrivateStorage(plugin.data[0].plugin_code);
     }
 
     const sqls = [
@@ -98,6 +99,7 @@ export async function batchDeletePlugins(pluginIds: number[]): Promise<Response>
         if (plugin.code === 1 && plugin.data[0]?.plugin_code) {
             await execDestroyScript(plugin.data[0].plugin_code);
             await cleanupPluginTables(plugin.data[0].plugin_code);
+            await cleanupPluginPrivateStorage(plugin.data[0].plugin_code);
         }
     }
     return transaction([
@@ -120,12 +122,70 @@ export async function getPluginSettings(pluginId: number): Promise<Response> {
 
 export async function getAllSettings(): Promise<Response> {
     const sql = `
-        SELECT ts.*, tp.plugin_alias
+        SELECT ts.*, tp.plugin_alias, tp.plugin_code,
+               ag.resource_display_name AS directory_display_name, ag.status AS directory_status
         FROM tp_setting ts
         LEFT JOIN tp_plugin tp ON ts.plugin_id = tp.id
+        LEFT JOIN access_grant ag ON ag.grant_id = ts.access_grant_id AND ag.subject_type = 'plugin' AND ag.subject_id = tp.plugin_code AND ag.resource_type = 'filesystem_directory'
         ORDER BY tp.plugin_alias
     `;
     return query(sql);
+}
+
+/**
+ * Records durable directory authorization independently from plugin settings.
+ * `permissionKey` is a stable identifier chosen in plugin source code. A
+ * matching `dir` setting is updated only so the trusted system settings page
+ * can display the actual selected path.
+ */
+export async function grantPluginDirectoryPermission(pluginCode: string, permissionKey: string, candidateGrantId: string, path: string, displayName: string): Promise<Response> {
+    const existing = await query(`SELECT grant_id FROM access_grant WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? LIMIT 1`, [pluginCode, permissionKey]);
+    if (existing.code !== 1) return existing;
+    const grantId = existing.data[0]?.grant_id ?? candidateGrantId;
+    const now = Date.now();
+    const saved = await execute(`INSERT INTO access_grant (grant_id, subject_type, subject_id, resource_type, permission_key, resource_locator, resource_display_name, access_scope, status, granted_by, granted_at, revoked_at, created_at, updated_at)
+      VALUES (?, 'plugin', ?, 'filesystem_directory', ?, ?, ?, 'read_write', 'active', 'user_selection', ?, NULL, ?, ?)
+      ON CONFLICT(grant_id) DO UPDATE SET permission_key = excluded.permission_key, resource_locator = excluded.resource_locator, resource_display_name = excluded.resource_display_name, status = 'active', revoked_at = NULL, updated_at = excluded.updated_at`, [grantId, pluginCode, permissionKey, path, displayName, now, now, now]);
+    if (saved.code !== 1) return saved;
+    const projection = await execute(`UPDATE tp_setting SET param_value = ?, access_grant_id = ?, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND param_type = 'dir'`, [path, grantId, now, pluginCode, permissionKey]);
+    if (projection.code !== 1) return projection;
+    return Response.ok({ grant_id: grantId, resource_locator: path, resource_display_name: displayName });
+}
+
+export async function getPluginDirectoryPermission(pluginCode: string, permissionKey: string): Promise<Response> {
+    const res = await query(`SELECT grant_id, resource_locator, resource_display_name, status FROM access_grant WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? AND status = 'active' LIMIT 1`, [pluginCode, permissionKey]);
+    if (res.code !== 1 || !res.data[0]) return Response.errorPermission('目录授权不存在、已撤销或引用已过期');
+    return Response.ok(res.data[0]);
+}
+
+export async function revokePluginDirectoryPermission(pluginCode: string, permissionKey: string): Promise<Response> {
+    const current = await query(`SELECT grant_id FROM access_grant WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? AND status = 'active' LIMIT 1`, [pluginCode, permissionKey]);
+    if (current.code !== 1 || !current.data[0]) return Response.errorPermission('目录授权不存在、已撤销或引用已过期');
+    const now = Date.now();
+    const grantId = current.data[0].grant_id;
+    const revoked = await execute(`UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE grant_id = ? AND subject_type = 'plugin' AND subject_id = ?`, [now, now, grantId, pluginCode]);
+    if (revoked.code !== 1) return revoked;
+    const projection = await execute(`UPDATE tp_setting SET param_value = '', access_grant_id = NULL, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND access_grant_id = ?`, [now, pluginCode, permissionKey, grantId]);
+    return projection.code === 1 ? Response.ok({ grant_id: grantId }) : projection;
+}
+
+/** Trusted host settings UI entry: paths never cross the plugin bridge. */
+export async function selectPluginStorageDirectory(pluginCode: string, settingKey: string, path: string): Promise<Response> {
+    const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
+    return grantPluginDirectoryPermission(pluginCode, settingKey, crypto.randomUUID(), path, name);
+}
+
+/**
+ * Rehydrates a host-issued directory reference after the bridge's in-memory
+ * cache is recreated. The plugin identity is part of the lookup, so an ID
+ * obtained by another plugin can never be resolved.
+ */
+export async function getDirectoryAccessGrant(pluginCode: string, grantId: string): Promise<Response> {
+    const res = await query(`SELECT grant_id, resource_locator, resource_display_name, status FROM access_grant
+        WHERE subject_type = 'plugin' AND subject_id = ? AND grant_id = ?
+          AND resource_type = 'filesystem_directory' AND status = 'active'`, [pluginCode, grantId]);
+    if (res.code !== 1 || !res.data[0]) return Response.errorPermission('目录授权不存在、已撤销或不属于当前插件');
+    return Response.ok(res.data[0]);
 }
 
 const PLUGIN_CENTER_MENU_ID = '100002';
@@ -338,6 +398,20 @@ export async function cleanupPluginTables(pluginCode: string): Promise<void> {
     }
 }
 
+/** Removes only the plugin-owned private storage subtree during uninstall. */
+export async function cleanupPluginPrivateStorage(pluginCode: string): Promise<void> {
+    try {
+        const { appDataDir } = await import('@tauri-apps/api/path');
+        const { exists, remove } = await import('@tauri-apps/plugin-fs');
+        const path = `${await appDataDir()}/plugin/${pluginCode}/data`;
+        if (await exists(path)) await remove(path, { recursive: true });
+    } catch (error) {
+        // Database/plugin deletion must not leave an undeletable package record.
+        // The data directory remains host-owned and can be retried by maintenance.
+        console.warn(`清理插件私有存储失败（pluginCode=${pluginCode}）:`, normalizeError(error));
+    }
+}
+
 export function semverCompare(a: string, b: string): number {
     const [ma, mb] = [a, b].map(v => v.split('.').map(Number));
     for (let i = 0; i < 3; i++) {
@@ -386,9 +460,14 @@ function getLatestVersionStatic(): number {
 }
 
 export async function createDebugPlugin({ pluginCode, pluginAlias, debugUrl, manifest, initScripts }: { pluginCode: string; pluginAlias: string; debugUrl: string; manifest?: any; initScripts?: Record<string, string> }): Promise<Response> {
+    let existingDebugPlugin: any;
     const existsRes = await isPluginCodeExists(pluginCode);
     if (existsRes.code === 1 && existsRes.data === true) {
-        return Response.errorParam(`插件编码 ${pluginCode} 已存在`);
+        const existing = await getPluginByCode(pluginCode);
+        if (existing.code !== 1 || existing.data.plugin_type !== PLUGIN_TYPE_DEBUG) {
+            return Response.errorParam(`插件编码 ${pluginCode} 已存在`);
+        }
+        existingDebugPlugin = existing.data;
     }
     if (manifest) {
         if (manifest.name !== pluginCode) {
@@ -400,7 +479,7 @@ export async function createDebugPlugin({ pluginCode, pluginAlias, debugUrl, man
         }
     }
     const now = Date.now();
-    const tempUid = crypto.randomUUID();
+    const tempUid = existingDebugPlugin?.plugin_uid || crypto.randomUUID();
     const pluginVersion = manifest?.version || '0.0.0';
 
     // 事务：tp_plugin + tp_menu 原子写入
@@ -676,7 +755,6 @@ export async function runPluginInitScripts(
 
     // 逐版本执行
     const { transaction, splitSqlStatements } = await import('@/sql/common');
-    const { rewriteWithDeclaredTables } = await import('@/bridge/sqlRewriter');
     const { invoke } = await import('@tauri-apps/api/core');
     let executed = 0;
     for (const version of pending) {
@@ -686,8 +764,10 @@ export async function runPluginInitScripts(
         const statements: string[] = [];
         for (const stmt of rawStatements) {
             const tables: string[] = await invoke('extract_tables_from_sql', { sql: stmt });
-            const rewritten = rewriteWithDeclaredTables(stmt, tables, pluginCode);
-            statements.push(rewritten);
+            const prepared = await invoke<{ sql: string }>('prepare_plugin_sql', {
+                sql: stmt, declaredTables: tables, pluginCode, action: 'migration'
+            });
+            statements.push(prepared.sql);
         }
         try {
             const txRes = await transaction(statements.map(s => ({ sql: s })));
@@ -733,14 +813,15 @@ export async function execDestroyScript(pluginCode: string): Promise<void> {
         if (await exists(destroyPath)) {
             const sql = await readTextFile(destroyPath);
             const { splitSqlStatements, transaction } = await import('@/sql/common');
-            const { rewriteWithDeclaredTables } = await import('@/bridge/sqlRewriter');
             const { invoke } = await import('@tauri-apps/api/core');
             const rawStatements = splitSqlStatements(sql);
             const statements: string[] = [];
             for (const stmt of rawStatements) {
                 const tables: string[] = await invoke('extract_tables_from_sql', { sql: stmt });
-                const rewritten = rewriteWithDeclaredTables(stmt, tables, pluginCode);
-                statements.push(rewritten);
+                const prepared = await invoke<{ sql: string }>('prepare_plugin_sql', {
+                    sql: stmt, declaredTables: tables, pluginCode, action: 'migration'
+                });
+                statements.push(prepared.sql);
             }
             if (statements.length > 0) {
                 console.log(`[execDestroyScript] ${pluginCode}: 执行 DROP 事务:`, statements);

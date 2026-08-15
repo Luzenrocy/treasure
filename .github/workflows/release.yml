@@ -47,13 +47,41 @@ jobs:
         run: npm ci
 
       - name: Build and create release
+        id: tauri
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: v__VERSION__
           releaseName: Treasure v__VERSION__
-          releaseBody: See the assets below to download and install this version.
+          releaseBody: Download an installer below, or use the Windows x64 portable ZIP without installation.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Package Windows portable build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.tauri.outputs.appVersion }}'
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw 'Tauri action did not report an application version.'
+          }
+
+          $binary = 'src-tauri/target/release/treasure.exe'
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "Portable executable was not found at $binary"
+          }
+
+          $archive = "Treasure_${version}_windows-x64_portable.zip"
+          Compress-Archive -LiteralPath $binary -DestinationPath $archive -CompressionLevel Optimal
+          "PORTABLE_ARCHIVE=$archive" >> $env:GITHUB_ENV
+          "RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+
+      - name: Upload Windows portable build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$env:RELEASE_TAG" "$env:PORTABLE_ARCHIVE" --clobber

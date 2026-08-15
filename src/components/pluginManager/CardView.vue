@@ -8,7 +8,8 @@
               <PluginIcon :iconRef="plugin.pluginIcon" :pluginCode="plugin.pluginCode" :size="64" :fallback="plugin.menuIcon || 'Document'" />
             </div>
             <div class="info">
-              <h3 @click.stop="openPlugin(plugin)">{{ plugin.pluginAlias }}({{ plugin.pluginCode }}) </h3>
+              <h3 @click.stop="openPlugin(plugin)">{{ plugin.pluginAlias }}</h3>
+              <p>插件编码: {{ plugin.pluginCode }}</p>
               <p>版本号: {{ plugin.pluginVersion }}</p>
               <p>更新时间: {{ formatDate(plugin.updatedAt) }}</p>
             </div>
@@ -235,6 +236,7 @@ export default defineComponent({
 }
 .info h3{
   height: 22px !important;
+  text-align: center;
 }
 .info p{
   color: gray;

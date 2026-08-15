@@ -1,6 +1,6 @@
 # Treasure
 
-> 一个以本地优先为核心、可承载多种效率工具的桌面应用平台。
+> 一个以插件扩展为核心、在用户设备上保存核心数据并执行系统能力的桌面应用平台。
 
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8DB?logo=tauri&logoColor=white)](https://v2.tauri.app)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
@@ -9,7 +9,7 @@
 
 **Treasure** 最初源于一个很朴素的愿望：做一款自己真正愿意长期使用的 Markdown 笔记程序。随着 JSON 格式化、时间戳转换等网页小工具在日常工作中不断出现，一个更有价值的方向逐渐清晰——与其在浏览器标签页之间切换，不如把这些小而实用的能力收纳到同一个可靠、原生、可扩展的桌面空间中。
 
-Treasure 因此从单一应用的设想，演进为一个面向效率工具的桌面宿主平台：它负责统一的工作区、数据与安全边界、菜单与标签体验，以及插件运行时；具体工具能力则以独立插件的形式接入。
+Treasure 因此从单一应用的设想，演进为一个面向效率工具的桌面宿主平台：它负责统一的工作区、数据与安全边界、菜单与标签体验，以及插件运行时；具体工具能力则以独立插件的形式接入。下文所称“宿主”，就是负责加载插件页面并提供数据库、文件、设置和原生能力的 Treasure 桌面应用。
 
 ## 目录
 
@@ -21,12 +21,15 @@ Treasure 因此从单一应用的设想，演进为一个面向效率工具的�
 - [项目结构](#项目结构)
 - [快速开始](#快速开始)
 - [开发与构建](#开发与构建)
+- [文档导航](#文档导航)
 - [项目生态](#项目生态)
 - [文档与许可证](#文档与许可证)
 
 ## 产品定位
 
-Treasure 是一个**本地优先的桌面工具容器**，而不是某一类工具本身。它将不同用途的工具统一收纳到一致的应用外壳中，让用户在一个桌面工作区内完成打开、切换、配置与管理。
+Treasure 是一个**可扩展的本地桌面应用平台**，而不是某一类工具本身。它作为桌面宿主加载和管理不同用途的插件，在统一工作区中提供导航、标签、系统设置、数据隔离和系统能力调用。
+
+这里的“本地”有明确边界：Treasure 的插件元数据、系统设置和插件业务数据默认保存在用户设备上的 SQLite 与应用数据目录中，文件、窗口、菜单和通知等能力也由桌面应用在本机执行；应用的基础运行不依赖云端服务。具体插件是否访问网络，由该插件自身的产品功能和权限设计决定。
 
 | 面向对象 | 提供的价值 |
 | --- | --- |
@@ -36,7 +39,7 @@ Treasure 是一个**本地优先的桌面工具容器**，而不是某一类工�
 
 ### 设计原则
 
-- **本地优先**：应用元数据、设置与工具数据基于本地 SQLite 保存；不以在线服务为前提。
+- **本地运行与存储**：核心元数据、系统设置和插件业务数据保存在用户设备上，基础能力不以在线服务为前提。
 - **统一而不过度统一**：外壳提供稳定的导航、标签和管理体验；工具本身保留独立的交互空间。
 - **渐进式扩展**：新增能力优先以插件接入，不将每个工具都耦合进宿主主工程。
 - **安全隔离**：插件运行在 iframe 中，经由消息桥接访问受控能力；不同插件的数据表具有命名空间隔离。
@@ -65,18 +68,18 @@ Treasure 是一个**本地优先的桌面工具容器**，而不是某一类工�
 | 内容区 | 承载欢迎页、插件管理、系统设置等宿主页面；工具页面以独立 iframe 显示。 |
 | 原生菜单 | 根据当前活动工具注册的菜单项重建，并与系统默认菜单协同工作。 |
 
-### 一次启动会发生什么
+### 应用启动与插件加载流程
 
 1. Vue 应用挂载 Element Plus、Pinia 与 Vue Router。
 2. 宿主初始化 SDK 宿主网关，并启动 SQLite 数据库迁移。
 3. 数据库就绪后，读取菜单、插件与设置数据，构建侧边导航。
-4. 用户打开工具时，宿主创建标签；工具页面由 `plugin://localhost/<pluginCode>/index.html` 加载。
+4. 用户打开已安装工具时，宿主创建标签；工具页面由 `plugin://localhost/plugin/<pluginCode>/index.html` 加载。调试插件则加载其登记的本地开发地址。
 5. 工具通过 SDK 提供的接口调用宿主能力；宿主负责校验、执行并返回统一结果。
 
 ### 宿主能力范围
 
 - **工具目录管理**：查看、配置、隐藏、删除与调试接入的工具。
-- **统一配置**：维护平台与工具的设置项；开发模式开关决定是否展示调试工具。
+- **统一配置**：维护平台与工具的设置项；插件调试入口决定是否展示调试插件。
 - **标签与窗口体验**：管理打开状态、活动标签、页面缓存、macOS 窗口拖动区与原生菜单。
 - **本地存储服务**：提供迁移、查询、写入、事务、日志等基础能力。
 - **受控系统能力**：通过 Tauri 插件提供文件读写、文件选择、通知、日志和外部打开等能力。
@@ -102,7 +105,7 @@ flowchart TB
   Frame --> Native
 ```
 
-### 前端
+### 前端应用层
 
 - **Vue 3 + TypeScript**：负责宿主 UI、页面组织与类型化业务逻辑。
 - **Vite**：提供开发服务器与生产构建；`@` 指向 `src`。
@@ -110,14 +113,14 @@ flowchart TB
 - **Pinia**：维护菜单、标签和工具菜单注册等共享状态。
 - **Vue Router**：管理欢迎页、插件管理、设置与 `/plugin/:pluginCode` 路由；插件路由由应用外壳实际渲染。
 
-### 桌面与原生层
+### 桌面运行时与原生能力层
 
 - **Tauri 2 / Rust**：构建跨平台桌面应用，并承接窗口、菜单、文件与通知等原生能力。
 - **macOS 窗口适配**：采用 Overlay 标题栏与隐藏标题，配合原生红黄绿窗口按钮的显隐控制。
 - **自定义插件协议**：`plugin://localhost` 负责向 iframe 提供已安装工具的静态资源。
 - **应用打包**：Tauri bundler 生成平台安装包；macOS 使用 `icons/icon.icns` 作为应用图标资源。
 
-### 数据层
+### 数据持久化层
 
 - **SQLite + rusqlite**：数据库连接与关键操作由 Rust 层托管。
 - **可靠性设置**：启用 WAL、外键约束与忙等待；查询、写入和事务均有统一入口。
@@ -139,8 +142,8 @@ flowchart TB
 关键约束如下：
 
 - 每个工具只能访问属于自身命名空间的 `plugin_{pluginCode}_*` 数据表。
-- `tp_*`、`sys_*` 等平台表不可由工具直接操作。
-- 禁止高风险 DDL，如 `DROP TABLE`、`ALTER TABLE`、`RENAME TABLE`；仅允许受控的 `CREATE TABLE`。
+- 插件没有 Treasure 系统表的直接访问权限；数据库接口只能访问当前插件的业务表。系统设置等平台级交互必须使用宿主通过 SDK 明确公开的专用接口。
+- 插件运行时接口拒绝 `CREATE`、`DROP`、`ALTER`、`PRAGMA` 等 DDL 或数据库控制语句；建表和结构升级只通过插件安装/升级迁移脚本执行。
 - 支持参数化查询与多语句事务；事务中的每条 SQL 都会分别校验。
 - 文件、对话框等系统能力也通过 SDK 接口调用，由宿主网关执行受控转发，而非直接暴露给 iframe。
 
@@ -217,24 +220,26 @@ npm install
 npm run tauri -- dev
 ```
 
-开发态 Vite 地址固定为 `http://localhost:1420`，HMR WebSocket 端口为 `1421`。如需局域网调试，可设置 `TAURI_DEV_HOST`。
+源码启动的 Treasure 桌面宿主使用 `npm run tauri -- dev`。其内部 Vite 地址固定为 `http://localhost:1420`；只有设置 `TAURI_DEV_HOST` 进行远程开发时，HMR WebSocket 才显式使用 `1421`。宿主前端地址不是插件开发地址；插件项目另行执行 `npm run dev`，通常使用 `http://localhost:5173`，并在插件中心通过“注册调试插件”加载。
 
 ## 开发与构建
 
 | 命令 | 说明 |
 | --- | --- |
-| `npm run dev` | 仅启动 Vite 前端开发服务器。 |
-| `npm run tauri -- dev` | 启动 Tauri 桌面开发应用。 |
+| `npm run dev` | 仅启动 Treasure 自身的 Vite 前端服务，不单独构成插件宿主。 |
+| `npm run tauri -- dev` | 启动可注册调试插件的 Tauri 桌面宿主。 |
 | `npm run build` | 执行 Vue 类型检查并构建前端资源。 |
 | `npm run tauri -- build` | 先构建前端，再产出当前平台的桌面安装包。 |
+
+推送版本标签后，发布工作流会生成 macOS Apple Silicon、macOS Intel 和 Windows x64 安装包；Windows 同时提供无需安装、解压后即可运行的 `portable.zip` 版本。
 
 ### 开发约定
 
 - 新增宿主数据结构时，将迁移逻辑集中在 Rust 数据库层，并确保已有数据可升级。
 - 所有宿主数据访问应等待数据库迁移完成，不绕过 `sql/common.ts` 的就绪门禁。
-- 新增桥接 action 时，应同时考虑来源校验、参数校验、权限范围与标准响应。
+- 新增桥接 operation 时，应同时更新宿主能力注册表、SDK 类型与协议文档，并考虑来源校验、参数校验、权限范围、资源上限与标准响应。
 - 平台界面应复用 `src/style/common.css` 与本文的宿主界面规范，避免新增无来源的颜色。
-- 本仓库不包含 lint 或 test npm 脚本；提交前至少执行 `npm run build`。
+- 本仓库当前没有 lint 脚本；提交前至少执行 `npm run typecheck`、`npm test` 与 `npm run build`。桥接、文件、菜单或安装流程变更还需在 Tauri 桌面宿主中联调。
 
 ## 项目生态
 
@@ -245,6 +250,16 @@ Treasure 由三个独立仓库构成，各自保持清晰职责：
 | [Luzenrocy/treasure](https://github.com/Luzenrocy/treasure) | 本仓库。桌面宿主、UI 外壳、本地数据服务、桥接层与平台管理功能。 |
 | [Luzenrocy/treasure-sdk](https://github.com/Luzenrocy/treasure-sdk) | 工具接入 SDK 与开发约定。 |
 | [Luzenrocy/treasure-plugins](https://github.com/Luzenrocy/treasure-plugins) | 独立工具源码与发布内容。 |
+
+## 文档导航
+
+| 目标 | 文档 |
+| --- | --- |
+| 理解宿主边界、启动链路、能力网关、数据和权限模型 | [宿主架构](docs/ARCHITECTURE.md) |
+| 首次搭建、源码定位、插件联调、变更流程和验证矩阵 | [宿主研发指南](docs/DEVELOPMENT-GUIDE.md) |
+| 查 SDK 类型、参数、返回值和错误处理 | [SDK API 参考](https://github.com/Luzenrocy/treasure-sdk/blob/main/docs/API-REFERENCE.md) |
+| 创建、调试、迁移和发布业务插件 | [插件研发指南](https://github.com/Luzenrocy/treasure-plugins/blob/main/docs/PLUGIN-DEVELOPMENT-GUIDE.md) |
+| 查看每轮文档修复和第三方审查结论 | [三项目文档迭代记录](https://github.com/Luzenrocy/treasure-plugins/blob/main/docs/DOCUMENTATION-ITERATION-LOG.md) |
 
 ## 文档与许可证
 

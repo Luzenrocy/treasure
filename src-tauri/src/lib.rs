@@ -5,10 +5,11 @@ use tauri::Manager;
 use tauri::State;
 use tauri_plugin_notification::NotificationExt;
 use zip::ZipArchive;
-use sqlparser::ast::{Statement, Query, SetExpr, TableFactor, TableWithJoins, Join, ColumnOption, TableConstraint};
+use sqlparser::ast::{Statement, Query, SetExpr, TableFactor, TableWithJoins, Join, AlterTableOperation, ColumnOption, TableConstraint, Ident, ObjectName, visit_relations_mut};
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use tracing::{debug, error, info, trace, warn};
 mod db;
 use db::Database;
@@ -66,9 +67,95 @@ fn extract_table_names_recursive(stmt: &Statement) -> HashSet<String> {
                 tables.insert(name.to_string().to_lowercase());
             }
         }
+        Statement::AlterTable { name, operations, .. } => {
+            tables.insert(name.to_string().to_lowercase());
+            for operation in operations {
+                match operation {
+                    AlterTableOperation::RenameTable { table_name } => {
+                        tables.insert(table_name.to_string().to_lowercase());
+                    }
+                    AlterTableOperation::AddConstraint(constraint) => {
+                        if let TableConstraint::ForeignKey { foreign_table, .. } = constraint {
+                            tables.insert(foreign_table.to_string().to_lowercase());
+                        }
+                    }
+                    AlterTableOperation::AddColumn { column_def, .. } => {
+                        for option_def in &column_def.options {
+                            if let ColumnOption::ForeignKey { foreign_table, .. } = &option_def.option {
+                                tables.insert(foreign_table.to_string().to_lowercase());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         _ => {}
     }
     tables
+}
+
+fn namespace_declared_relation(relation: &mut ObjectName, declared: &HashSet<String>, prefix: &str) {
+    let bare = relation.to_string().trim_matches('"').to_lowercase();
+    if declared.contains(&bare) {
+        *relation = ObjectName(vec![Ident::with_quote('"', format!("{}_{}", prefix, bare))]);
+    }
+}
+
+fn namespace_foreign_key(constraint: &mut TableConstraint, declared: &HashSet<String>, prefix: &str) {
+    if let TableConstraint::ForeignKey { foreign_table, .. } = constraint {
+        namespace_declared_relation(foreign_table, declared, prefix);
+    }
+}
+
+fn namespace_column_foreign_keys(
+    column: &mut sqlparser::ast::ColumnDef,
+    declared: &HashSet<String>,
+    prefix: &str,
+) {
+    for option_def in &mut column.options {
+        if let ColumnOption::ForeignKey { foreign_table, .. } = &mut option_def.option {
+            namespace_declared_relation(foreign_table, declared, prefix);
+        }
+    }
+}
+
+/// `visit_relations_mut` deliberately does not visit foreign-key targets or
+/// `ALTER TABLE ... RENAME TO` targets. They are table references as well and
+/// must receive the same namespace transformation as query/DML relations.
+fn namespace_migration_references(statement: &mut Statement, declared: &HashSet<String>, prefix: &str) {
+    match statement {
+        Statement::CreateTable(create) => {
+            for column in &mut create.columns {
+                namespace_column_foreign_keys(column, declared, prefix);
+            }
+            for constraint in &mut create.constraints {
+                namespace_foreign_key(constraint, declared, prefix);
+            }
+        }
+        Statement::AlterTable { operations, .. } => {
+            for operation in operations {
+                match operation {
+                    AlterTableOperation::RenameTable { table_name } => {
+                        namespace_declared_relation(table_name, declared, prefix);
+                    }
+                    AlterTableOperation::AddConstraint(constraint) => {
+                        namespace_foreign_key(constraint, declared, prefix);
+                    }
+                    AlterTableOperation::AddColumn { column_def, .. } => {
+                        namespace_column_foreign_keys(column_def, declared, prefix);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Statement::Drop { names, .. } => {
+            for name in names {
+                namespace_declared_relation(name, declared, prefix);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn extract_tables_from_query(query: &Query, tables: &mut HashSet<String>) {
@@ -184,6 +271,37 @@ async fn verify_sql(sql: String, declared_tables: Vec<String>) -> Result<serde_j
     }))
 }
 
+/** Parses, validates and namespaces SQL in one Rust AST operation. */
+#[tauri::command]
+async fn prepare_plugin_sql(sql: String, declared_tables: Vec<String>, plugin_code: String, action: String) -> Result<serde_json::Value, String> {
+    let dialect = SQLiteDialect {};
+    let mut statements = Parser::parse_sql(&dialect, &sql).map_err(|e| format!("SQL解析失败: {}", e))?;
+    if statements.len() != 1 { return Err("只支持单条 SQL 语句".into()); }
+    let allowed = match action.as_str() {
+        "query" => matches!(statements[0], Statement::Query(_)),
+        "execute" => matches!(statements[0], Statement::Insert(_) | Statement::Update { .. } | Statement::Delete(_)),
+        // Installation and uninstall scripts are host-owned, versioned migration
+        // inputs. Runtime plugin requests can never select this mode. INSERT is
+        // required for data-preserving schema repairs (`INSERT ... SELECT ...`).
+        "migration" => matches!(statements[0],
+            Statement::CreateTable { .. } | Statement::CreateIndex { .. } |
+            Statement::Drop { .. } | Statement::AlterTable { .. } | Statement::Insert(_)),
+        _ => false,
+    };
+    if !allowed { return Err("该数据库能力不允许此 SQL 语句类型".into()); }
+    let actual = extract_table_names_recursive(&statements[0]);
+    let declared: HashSet<String> = declared_tables.iter().map(|table| table.to_lowercase()).collect();
+    let missing: Vec<String> = actual.iter().filter(|table| !declared.contains(*table)).cloned().collect();
+    if !missing.is_empty() { return Err(format!("SQL 引用了未声明表: {}", missing.join(", "))); }
+    let prefix = format!("plugin_{}", plugin_code);
+    let _ = visit_relations_mut(&mut statements, |relation: &mut ObjectName| {
+        namespace_declared_relation(relation, &declared, &prefix);
+        ControlFlow::<()>::Continue(())
+    });
+    namespace_migration_references(&mut statements[0], &declared, &prefix);
+    Ok(serde_json::json!({ "sql": statements[0].to_string() }))
+}
+
 #[cfg(target_os = "macos")]
 fn set_traffic_lights_hidden_internal(window: &tauri::WebviewWindow, hidden: bool) -> Result<(), String> {
     use objc2_app_kit::{NSWindow, NSWindowButton};
@@ -231,7 +349,42 @@ fn extract_tables_from_sql(sql: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn move_to_trash(path: String) -> Result<(), String> {
-    trash::delete(&path).map_err(|e| e.to_string())
+    move_path_to_trash(&path)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_trash_context() -> trash::TrashContext {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+    let mut context = trash::TrashContext::new();
+    // Finder's AppleScript path fails for some hidden, external-volume and
+    // sandbox-adjacent files. NSFileManager moves the same item to Trash
+    // without requiring Finder automation.
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context
+}
+
+fn move_path_to_trash(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return macos_trash_context().delete(path).map_err(|e| e.to_string());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        trash::delete(path).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod trash_tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_trash_context_uses_ns_file_manager_instead_of_finder() {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+        assert!(matches!(super::macos_trash_context().delete_method(), DeleteMethod::NsFileManager));
+    }
 }
 
 #[tauri::command]
@@ -391,6 +544,7 @@ pub fn run() {
             close_window,
             set_traffic_lights_visible,
             verify_sql,
+            prepare_plugin_sql,
             extract_tables_from_sql,
             db::db_query,
             db::db_execute,
@@ -460,5 +614,192 @@ fn get_mime_type(path: &PathBuf) -> &'static str {
         Some("txt") => "text/plain; charset=utf-8",
         Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod sql_contract_tests {
+    use super::*;
+
+    #[test]
+    fn namespaces_cte_join_tables_with_one_ast_pass() {
+        let prepared = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "WITH active AS (SELECT id FROM tasks WHERE status = ?) SELECT t.id FROM tasks t JOIN task_tags tt ON tt.task_id = t.id WHERE EXISTS (SELECT 1 FROM active)".into(),
+            vec!["tasks".into(), "task_tags".into()],
+            "demo".into(),
+            "query".into(),
+        )).expect("valid query");
+        let sql = prepared["sql"].as_str().expect("sql result");
+        assert!(sql.contains("plugin_demo_tasks"));
+        assert!(sql.contains("plugin_demo_task_tags"));
+        assert!(!sql.contains("plugin_demo_active"));
+    }
+
+    #[test]
+    fn accepts_complex_dml_but_rejects_runtime_ddl_and_multi_statement() {
+        let write = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "UPDATE tasks SET status = ? WHERE EXISTS (SELECT 1 FROM task_tags WHERE task_id = tasks.id) RETURNING id".into(),
+            vec!["tasks".into(), "task_tags".into()],
+            "demo".into(),
+            "execute".into(),
+        ));
+        assert!(write.is_ok());
+
+        let ddl = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "CREATE TABLE tasks (id INTEGER)".into(), vec!["tasks".into()], "demo".into(), "execute".into(),
+        ));
+        assert!(ddl.unwrap_err().contains("不允许"));
+
+        let multiple = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "SELECT * FROM tasks; SELECT * FROM tasks".into(), vec!["tasks".into()], "demo".into(), "query".into(),
+        ));
+        assert!(multiple.unwrap_err().contains("单条"));
+    }
+
+    #[test]
+    fn namespaces_self_referencing_foreign_keys_in_plugin_migrations() {
+        let prepared = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "CREATE TABLE tasks (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES tasks(id))".into(),
+            vec!["tasks".into()],
+            "demo".into(),
+            "migration".into(),
+        )).expect("valid plugin migration");
+        let sql = prepared["sql"].as_str().expect("sql result");
+        assert!(sql.contains("CREATE TABLE \"plugin_demo_tasks\""));
+        assert!(sql.contains("REFERENCES \"plugin_demo_tasks\" (id)"));
+    }
+
+    #[test]
+    fn namespaces_migration_rename_targets_and_copy_sources() {
+        let renamed = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "ALTER TABLE tasks RENAME TO tasks_legacy".into(),
+            vec!["tasks".into(), "tasks_legacy".into()],
+            "demo".into(),
+            "migration".into(),
+        )).expect("valid table rename");
+        assert_eq!(
+            renamed["sql"].as_str(),
+            Some("ALTER TABLE \"plugin_demo_tasks\" RENAME TO \"plugin_demo_tasks_legacy\"")
+        );
+
+        let copied = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "INSERT INTO tasks (id) SELECT id FROM tasks_legacy".into(),
+            vec!["tasks".into(), "tasks_legacy".into()],
+            "demo".into(),
+            "migration".into(),
+        )).expect("data-preserving migration copy");
+        let sql = copied["sql"].as_str().expect("sql result");
+        assert!(sql.contains("INSERT INTO \"plugin_demo_tasks\""));
+        assert!(sql.contains("FROM \"plugin_demo_tasks_legacy\""));
+    }
+
+    #[test]
+    fn migrated_self_referencing_table_accepts_root_task_with_foreign_keys_enabled() {
+        let prepared = tauri::async_runtime::block_on(prepare_plugin_sql(
+            "CREATE TABLE tasks (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES tasks(id))".into(),
+            vec!["tasks".into()],
+            "demo".into(),
+            "migration".into(),
+        )).expect("valid plugin migration");
+        let sql = prepared["sql"].as_str().expect("sql result");
+        let db = db::Database::open(":memory:", 1_000).expect("in-memory database");
+        db.execute_value(sql, rusqlite::params_from_iter(Vec::<rusqlite::types::Value>::new().into_iter()))
+            .expect("create namespaced table");
+        db.execute_value(
+            "INSERT INTO plugin_demo_tasks (id, parent_id) VALUES (1, NULL)",
+            rusqlite::params_from_iter(Vec::<rusqlite::types::Value>::new().into_iter()),
+        ).expect("root task must not resolve its foreign key to main.tasks");
+    }
+
+    #[test]
+    fn data_preserving_repair_replaces_broken_foreign_key_schema() {
+        fn prepare(sql: &str, tables: Vec<&str>) -> String {
+            tauri::async_runtime::block_on(prepare_plugin_sql(
+                sql.into(),
+                tables.into_iter().map(str::to_owned).collect(),
+                "demo".into(),
+                "migration".into(),
+            ))
+            .expect("valid repair statement")["sql"]
+                .as_str()
+                .expect("sql result")
+                .to_owned()
+        }
+
+        let db = db::Database::open(":memory:", 1_000).expect("in-memory database");
+        let empty = || rusqlite::params_from_iter(Vec::<rusqlite::types::Value>::new().into_iter());
+        db.execute_value("CREATE TABLE plugin_demo_tasks (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES tasks(id))", empty())
+            .expect("create legacy broken table");
+        db.execute_value("PRAGMA foreign_keys = OFF", empty()).expect("disable foreign keys to seed legacy data");
+        db.execute_value("INSERT INTO plugin_demo_tasks (id, parent_id) VALUES (1, NULL)", empty())
+            .expect("seed legacy row");
+        db.execute_value("PRAGMA foreign_keys = ON", empty()).expect("restore foreign key checks");
+
+        for (sql, tables) in [
+            ("ALTER TABLE tasks RENAME TO tasks_legacy", vec!["tasks", "tasks_legacy"]),
+            ("CREATE TABLE tasks (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES tasks(id))", vec!["tasks"]),
+            ("INSERT INTO tasks (id, parent_id) SELECT id, parent_id FROM tasks_legacy", vec!["tasks", "tasks_legacy"]),
+            ("DROP TABLE tasks_legacy", vec!["tasks_legacy"]),
+        ] {
+            let prepared = prepare(sql, tables);
+            db.execute_value(&prepared, empty())
+                .unwrap_or_else(|error| panic!("apply repair statement `{prepared}`: {error}"));
+        }
+
+        let rows = db.query_value("SELECT id FROM plugin_demo_tasks", empty()).expect("read preserved task");
+        assert_eq!(rows.len(), 1);
+        db.execute_value("INSERT INTO plugin_demo_tasks (id, parent_id) VALUES (2, 1)", empty())
+            .expect("repaired foreign key must reference the namespaced table");
+    }
+
+    #[test]
+    fn transaction_reports_each_statement_result() {
+        let db = db::Database::open(":memory:", 1_000).expect("in-memory database");
+        db.execute_value("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT)", rusqlite::params_from_iter(Vec::<rusqlite::types::Value>::new().into_iter()))
+            .expect("create table");
+        let results = db.transaction_value(
+            &["INSERT INTO tasks (title) VALUES (?)".into(), "UPDATE tasks SET title = ? WHERE id = ?".into()],
+            &[vec![serde_json::json!("first")], vec![serde_json::json!("updated"), serde_json::json!(1)]],
+        ).expect("transaction");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["affectedRows"], 1);
+        assert_eq!(results[1]["affectedRows"], 1);
+    }
+}
+
+#[cfg(test)]
+mod filesystem_capability_tests {
+    use std::collections::HashSet;
+
+    #[test]
+    fn host_filesystem_capability_uses_a_global_scope_and_supports_dot_paths() {
+        let capability: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json"))
+            .expect("valid capability JSON");
+        let permissions = capability["permissions"].as_array().expect("permissions array");
+        let commands: HashSet<&str> = permissions.iter()
+            .filter_map(|permission| permission.as_str().or_else(|| permission["identifier"].as_str()))
+            .collect();
+        for command in [
+            "fs:allow-read-file", "fs:allow-read-text-file", "fs:allow-read-dir",
+            "fs:allow-exists", "fs:allow-write-file", "fs:allow-write-text-file",
+            "fs:allow-mkdir", "fs:allow-remove",
+        ] {
+            assert!(commands.contains(command), "missing required fs command: {command}");
+        }
+        let scope_paths: HashSet<&str> = permissions.iter()
+            .find(|permission| permission["identifier"] == "fs:scope")
+            .and_then(|permission| permission["allow"].as_array())
+            .expect("global fs scope")
+            .iter()
+            .filter_map(|entry| entry["path"].as_str())
+            .collect();
+        assert!(scope_paths.contains("/"), "scope must include the root directory itself");
+        assert!(scope_paths.contains("/**/*"), "scope must include recursive descendants");
+        assert!(!include_str!("../capabilities/default.json").contains(".assets"), "capability must not encode application-specific hidden path names");
+
+        let tauri_config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("valid Tauri config");
+        assert_eq!(tauri_config["plugins"]["fs"]["requireLiteralLeadingDot"], false,
+            "glob scopes must match dotfiles and dot-directories without hard-coded names");
     }
 }

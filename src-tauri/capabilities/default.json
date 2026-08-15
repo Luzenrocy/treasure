@@ -1,164 +1,33 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Main-window capabilities. File paths are scoped globally here; plugin access is constrained by host-issued references in the bridge.",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
     "core:window:allow-set-decorations",
-    "opener:default",
     "core:window:allow-start-dragging",
+    "opener:default",
+
     "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-read-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-exists",
+    "fs:allow-write-file",
+    "fs:allow-write-text-file",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
     {
-      "identifier": "fs:allow-read-file",
+      "identifier": "fs:scope",
       "allow": [
-        {
-          "path": "$APPDATA/**/*"
-        }
+        { "path": "/" },
+        { "path": "/**/*" }
       ]
     },
-    {
-      "identifier": "fs:allow-exists",
-      "allow": [
-        {
-          "path": "$APPDATA/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-file",
-      "allow": [
-        {
-          "path": "/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-dir",
-      "allow": [
-        {
-          "path": "/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-text-file",
-      "allow": [
-        {
-          "path": "/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-write-text-file",
-      "allow": [
-        {
-          "path": "/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-remove",
-      "allow": [
-        {
-          "path": "/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-mkdir",
-      "allow": [
-        {
-          "path": "/**/*"
-        },
-        {
-          "path": "/**/.assets"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-dir",
-      "allow": [
-        {
-          "path": "$APPDATA/**/*"
-        },
-        {
-          "path": "/**/.assets"
-        },
-        {
-          "path": "/**/.assets/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-remove",
-      "allow": [
-        {
-          "path": "/**/.assets/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-write-file",
-      "allow": [
-        {
-          "path": "$APPDATA/**/*"
-        },
-        {
-          "path": "/**/.assets/**/*"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-file",
-      "allow": [
-        {
-          "path": "/**/.assets/.asset-index.json"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-exists",
-      "allow": [
-        {
-          "path": "/**/.assets/.asset-index.json"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-text-file",
-      "allow": [
-        {
-          "path": "/**/.assets/.asset-index.json"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-write-text-file",
-      "allow": [
-        {
-          "path": "/**/.assets/.asset-index.json"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-remove",
-      "allow": [
-        {
-          "path": "/**/.assets/.asset-index.json"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:allow-write-file",
-      "allow": [
-        {
-          "path": "/**/.assets/.asset-index.json"
-        }
-      ]
-    },
+
     "log:default",
     "log:allow-log",
     "dialog:default",

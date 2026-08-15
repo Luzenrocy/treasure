@@ -11,7 +11,7 @@
  *
  * 调用链路：
  *   pluginBridge.ts
- *     → rewriteWithDeclaredTables
+ *     → prepare_plugin_sql (Rust AST)
  *     → PluginSqlExecutor.executeRequest
  *     → validateSqlSecurity
  *     → 本模块（query / execute / transaction）

@@ -125,22 +125,22 @@ impl Database {
         Ok(json!({ "rowsAffected": rows_affected, "lastInsertId": last_insert_id }))
     }
 
-    pub fn transaction_value(&self, sqls: &[String], all_params: &[Vec<Value>]) -> RusResult<u64> {
+    pub fn transaction_value(&self, sqls: &[String], all_params: &[Vec<Value>]) -> RusResult<Vec<Value>> {
         let _guard = OpsGuard::new(Arc::clone(&self.ops_counter));
         let mut conn = self.write_conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let mut executed = 0u64;
+        let mut results = Vec::with_capacity(sqls.len());
         for (i, sql) in sqls.iter().enumerate() {
             let ps = params_from_iter(
                 all_params.get(i).map(|v| v.as_slice()).unwrap_or(&[])
                     .iter()
                     .map(to_rl)
             );
-            tx.execute(sql, ps)?;
-            executed += 1;
+            let affected_rows = tx.execute(sql, ps)? as u64;
+            results.push(json!({ "affectedRows": affected_rows, "lastInsertId": tx.last_insert_rowid() }));
         }
         tx.commit()?;
-        Ok(executed)
+        Ok(results)
     }
 
     pub fn readonly_transaction_value(&self, sqls: &[String], all_params: &[Vec<Value>]) -> RusResult<Vec<Value>> {
@@ -193,7 +193,7 @@ impl Database {
             ("5", "Optimize log settings"),
             ("6", "Logging defaults off and rename"),
             ("7", "Test plugin data"),
-            ("8", "More test plugin data"),
+            ("8", "2.0.0 Access grant baseline"),
         ];
 
         for (version_str, name) in &migrations {
@@ -341,7 +341,7 @@ pub async fn db_transaction(
     
     let result = timeout(Duration::from_millis(20000), task::spawn_blocking(move || -> Result<Value, String> {
         db.transaction_value(&sqls, &all_params)
-            .map(|n| json!({ "executed": n }))
+            .map(Value::Array)
             .map_err(|e| e.to_string())
     }))
     .await
@@ -349,7 +349,7 @@ pub async fn db_transaction(
     .map_err(|_| "线程错误".to_string())?;
     
     let cost_ms = start.elapsed().as_millis() as u64;
-    let executed = result.as_ref().map(|v| v.get("executed").and_then(|n| n.as_u64()).unwrap_or(0)).unwrap_or(0);
+    let executed = result.as_ref().map(|v| v.as_array().map(|rows| rows.len()).unwrap_or(0)).unwrap_or(0);
     
     info!(target: "db", op = "transaction", sql_count = sql_count, executed = executed, cost_ms = cost_ms, "db_transaction done");
     
@@ -434,7 +434,7 @@ fn apply_v1(tx: &rusqlite::Transaction, now: i64) -> RusResult<()> {
     tx.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tp_plugin_uid ON tp_plugin(plugin_uid) WHERE plugin_uid IS NOT NULL", [])?;
     tx.execute("INSERT OR IGNORE INTO tp_plugin (plugin_code, plugin_alias, plugin_version, plugin_type, plugin_uid, created_at, updated_at) VALUES ('treasure', '系统参数', '1.0.0', 0, '00000000-0000-5000-8000-000000000000', ?, ?)", [now, now])?;
     tx.execute("INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_options, plugin_id, menu_id, created_at, updated_at) VALUES ('treasure::plugin_manager_switch', '插件中心', 'switch', '1', '{\"activeText\":\"显示\",\"inActiveText\":\"隐藏\",\"activeValue\":\"1\",\"inactiveValue\":\"0\"}', (SELECT id FROM tp_plugin WHERE plugin_code = 'treasure'), '100002', ?, ?)", [now, now])?;
-    tx.execute("INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_options, plugin_id, created_at, updated_at) VALUES ('treasure::debug_switch', '调试', 'switch', '0', '{\"activeText\":\"开\",\"inActiveText\":\"关\",\"activeValue\":\"1\",\"inactiveValue\":\"0\"}', (SELECT id FROM tp_plugin WHERE plugin_code = 'treasure'), ?, ?)", [now, now])?;
+    tx.execute("INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_options, plugin_id, created_at, updated_at) VALUES ('treasure::debug_switch', '插件调试入口', 'switch', '0', '{\"activeText\":\"开\",\"inActiveText\":\"关\",\"activeValue\":\"1\",\"inactiveValue\":\"0\"}', (SELECT id FROM tp_plugin WHERE plugin_code = 'treasure'), ?, ?)", [now, now])?;
     let plugin_count: i64 = match tx.query_row("SELECT COUNT(*) as count FROM tp_plugin WHERE plugin_code = 'treasure'", [], |row| row.get(0)).optional() {
         Ok(Some(n)) => n,
         Ok(None) | Err(rusqlite::Error::QueryReturnedNoRows) => 0,
@@ -557,6 +557,62 @@ fn apply_v7(_tx: &rusqlite::Transaction) -> RusResult<()> {
     Ok(())
 }
 
-fn apply_v8(_tx: &rusqlite::Transaction) -> RusResult<()> {
+fn apply_v8(tx: &rusqlite::Transaction) -> RusResult<()> {
+    let setting_columns: Vec<(String,)> = tx.prepare("PRAGMA table_info(tp_setting)")?.query_and_then([], |row| Ok::<(String,), rusqlite::Error>((row.get::<_, String>(1)?,)))?.collect::<Result<Vec<_>, _>>()?;
+    if !setting_columns.iter().any(|(name,)| name == "access_grant_id") {
+        tx.execute("ALTER TABLE tp_setting ADD COLUMN access_grant_id TEXT", [])?;
+    }
+    tx.execute("CREATE TABLE IF NOT EXISTS access_grant (grant_id TEXT PRIMARY KEY, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, resource_type TEXT NOT NULL, permission_key TEXT, resource_locator TEXT NOT NULL, resource_display_name TEXT NOT NULL, access_scope TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', granted_by TEXT NOT NULL, granted_at INTEGER NOT NULL, revoked_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)", [])?;
+    let grant_columns: Vec<(String,)> = tx.prepare("PRAGMA table_info(access_grant)")?.query_and_then([], |row| Ok::<(String,), rusqlite::Error>((row.get::<_, String>(1)?,)))?.collect::<Result<Vec<_>, _>>()?;
+    if !grant_columns.iter().any(|(name,)| name == "permission_key") {
+        tx.execute("ALTER TABLE access_grant ADD COLUMN permission_key TEXT", [])?;
+    }
+    // One physical directory can intentionally be bound to more than one
+    // plugin-defined permission key, so resource lookup is indexed but not
+    // globally unique within a plugin.
+    tx.execute("DROP INDEX IF EXISTS idx_access_grant_subject_resource", [])?;
+    tx.execute("CREATE INDEX IF NOT EXISTS idx_access_grant_subject_resource ON access_grant(subject_type, subject_id, resource_type, resource_locator)", [])?;
+    tx.execute("CREATE INDEX IF NOT EXISTS idx_access_grant_active ON access_grant(subject_type, subject_id, status)", [])?;
+    tx.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_grant_permission_key ON access_grant(subject_type, subject_id, resource_type, permission_key) WHERE permission_key IS NOT NULL", [])?;
+    tx.execute("CREATE INDEX IF NOT EXISTS idx_tp_setting_access_grant ON tp_setting(access_grant_id)", [])?;
+    // Legacy values serialised a transient directory reference into a regular
+    // setting. They are neither a storage-directory binding nor an authority.
+    tx.execute("DELETE FROM tp_setting WHERE param_key = 'workspace_directory_grant'", [])?;
+    // Existing directory settings retain their displayed path. Associate their
+    // prior grant with the stable setting key so SDK 2.0 can restore it through
+    // permissions.getDirectory without interpreting a setting as authority.
+    tx.execute("UPDATE access_grant SET permission_key = (SELECT ts.param_key FROM tp_setting ts JOIN tp_plugin tp ON tp.id = ts.plugin_id WHERE ts.access_grant_id = access_grant.grant_id AND tp.plugin_code = access_grant.subject_id AND ts.param_type = 'dir' LIMIT 1) WHERE permission_key IS NULL AND subject_type = 'plugin' AND resource_type = 'filesystem_directory'", [])?;
+    tx.execute("UPDATE tp_setting SET param_name = '插件调试入口' WHERE param_code = 'treasure::debug_switch'", [])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn initializes_an_empty_database_in_migration_order() {
+        let database = Database::open(":memory:", 1_000).expect("open in-memory database");
+
+        database.run_migrations().expect("empty database migrations must succeed");
+
+        let tables = database
+            .query_value(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tp_setting', 'access_grant') ORDER BY name",
+                params_from_iter(Vec::<rusqlite::types::Value>::new().into_iter()),
+            )
+            .expect("read migrated tables");
+        assert_eq!(tables.len(), 2);
+
+        let versions = database
+            .query_value(
+                "SELECT version FROM sys_migration WHERE error IS NULL ORDER BY version",
+                params_from_iter(Vec::<rusqlite::types::Value>::new().into_iter()),
+            )
+            .expect("read applied migration history");
+        assert_eq!(
+            versions.iter().map(|row| row["version"].as_i64()).collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8)],
+        );
+    }
 }

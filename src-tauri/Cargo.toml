@@ -1,6 +1,6 @@
 [package]
 name = "treasure"
-version = "1.0.0"
+version = "2.0.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -23,7 +23,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 trash = "4"
 zip = "2"
-sqlparser = "0.52"
+sqlparser = { version = "0.52", features = ["visitor"] }
 rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 chrono = "0.4"

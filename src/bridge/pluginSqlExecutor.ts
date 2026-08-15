@@ -2,7 +2,7 @@
  * @file 插件 SQL 安全执行器
  *
  * 职责：
- *   1. 接收来自 pluginBridge.ts 的 SQL 请求（已通过表名重写）
+ *   1. 接收来自 pluginBridge.ts 的 SQL 请求（已由 Rust AST 完成表名重写）
  *   2. 调用 validateSqlSecurity 进行安全规则二次校验
  *   3. 根据 action 类型分发到 query / execute / transaction
  *
@@ -13,7 +13,7 @@
  *
  * 调用链路：
  *   pluginBridge.ts (action 分发)
- *     → rewriteWithDeclaredTables (表名重写)
+ *     → prepare_plugin_sql (Rust AST 表名重写)
  *     → PluginSqlExecutor.executeRequest (安全校验 + 执行)
  *       → validateSqlSecurity (二次校验)
  *       → sql/common.ts query / execute / transaction (实际执行)
@@ -74,8 +74,6 @@ export class PluginSqlExecutor {
                 return this.handleUpdate(sql, params);
             case 'remove':
                 return this.handleDelete(sql, params);
-            case 'ddl':
-                return this.handleDDL(sql);
             case 'transaction':
                 return this.handleTransaction(params, pluginCode);
             default:
@@ -101,11 +99,6 @@ export class PluginSqlExecutor {
     /** 处理 DELETE 语句 */
     private async handleDelete(sql: string, params: any[]): Promise<Response> {
         return execute(sql, params);
-    }
-
-    /** 处理 DDL 语句（仅允许 CREATE TABLE） */
-    private async handleDDL(sql: string): Promise<Response> {
-        return execute(sql);
     }
 
     /**
