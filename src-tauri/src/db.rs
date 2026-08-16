@@ -185,7 +185,7 @@ impl Database {
             })
             .unwrap_or(0);
 
-        let migrations: [(&str, &str); 8] = [
+        let migrations: [(&str, &str); 9] = [
             ("1", "Platform Base"),
             ("2", "Add param_key"),
             ("3", "Plugin Init Script Log"),
@@ -194,6 +194,7 @@ impl Database {
             ("6", "Logging defaults off and rename"),
             ("7", "Test plugin data"),
             ("8", "2.0.0 Access grant baseline"),
+            ("9", "Access grant active permission index"),
         ];
 
         for (version_str, name) in &migrations {
@@ -213,6 +214,7 @@ impl Database {
                           6 => apply_v6(&tx).map_err(|e| e.to_string())?,
                           7 => apply_v7(&tx).map_err(|e| e.to_string())?,
                           8 => apply_v8(&tx).map_err(|e| e.to_string())?,
+                          9 => apply_v9(&tx).map_err(|e| e.to_string())?,
                           _ => {}
                     }
                     tx.execute(
@@ -573,16 +575,27 @@ fn apply_v8(tx: &rusqlite::Transaction) -> RusResult<()> {
     tx.execute("DROP INDEX IF EXISTS idx_access_grant_subject_resource", [])?;
     tx.execute("CREATE INDEX IF NOT EXISTS idx_access_grant_subject_resource ON access_grant(subject_type, subject_id, resource_type, resource_locator)", [])?;
     tx.execute("CREATE INDEX IF NOT EXISTS idx_access_grant_active ON access_grant(subject_type, subject_id, status)", [])?;
-    tx.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_grant_permission_key ON access_grant(subject_type, subject_id, resource_type, permission_key) WHERE permission_key IS NOT NULL", [])?;
+    // Authorization records are append-only. Only one *active* authorization
+    // may exist for a plugin permission key; revoked history remains intact.
+    tx.execute("DROP INDEX IF EXISTS idx_access_grant_permission_key", [])?;
+    tx.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_grant_active_permission_key ON access_grant(subject_type, subject_id, resource_type, permission_key) WHERE permission_key IS NOT NULL AND status = 'active'", [])?;
     tx.execute("CREATE INDEX IF NOT EXISTS idx_tp_setting_access_grant ON tp_setting(access_grant_id)", [])?;
     // Legacy values serialised a transient directory reference into a regular
     // setting. They are neither a storage-directory binding nor an authority.
     tx.execute("DELETE FROM tp_setting WHERE param_key = 'workspace_directory_grant'", [])?;
     // Existing directory settings retain their displayed path. Associate their
-    // prior grant with the stable setting key so SDK 2.0 can restore it through
-    // permissions.getDirectory without interpreting a setting as authority.
+    // prior grant with the stable setting key so SDK 2.0 can verify it without
+    // interpreting the setting itself as authorization.
     tx.execute("UPDATE access_grant SET permission_key = (SELECT ts.param_key FROM tp_setting ts JOIN tp_plugin tp ON tp.id = ts.plugin_id WHERE ts.access_grant_id = access_grant.grant_id AND tp.plugin_code = access_grant.subject_id AND ts.param_type = 'dir' LIMIT 1) WHERE permission_key IS NULL AND subject_type = 'plugin' AND resource_type = 'filesystem_directory'", [])?;
     tx.execute("UPDATE tp_setting SET param_name = '插件调试入口' WHERE param_code = 'treasure::debug_switch'", [])?;
+    Ok(())
+}
+
+/** Applies the partial active-grant constraint to databases already at v8. */
+fn apply_v9(tx: &rusqlite::Transaction) -> RusResult<()> {
+    tx.execute("DROP INDEX IF EXISTS idx_access_grant_permission_key", [])?;
+    tx.execute("DROP INDEX IF EXISTS idx_access_grant_active_permission_key", [])?;
+    tx.execute("CREATE UNIQUE INDEX idx_access_grant_active_permission_key ON access_grant(subject_type, subject_id, resource_type, permission_key) WHERE permission_key IS NOT NULL AND status = 'active'", [])?;
     Ok(())
 }
 
@@ -612,7 +625,7 @@ mod migration_tests {
             .expect("read applied migration history");
         assert_eq!(
             versions.iter().map(|row| row["version"].as_i64()).collect::<Vec<_>>(),
-            vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8)],
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8), Some(9)],
         );
     }
 }

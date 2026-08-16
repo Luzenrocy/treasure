@@ -85,24 +85,37 @@ export async function deletePluginById(pluginId: number): Promise<Response> {
     }
 
     const sqls = [
+        ...(plugin.code === 1 && plugin.data[0]?.plugin_code
+            ? [{
+                sql: 'DELETE FROM access_grant WHERE subject_type = ? AND subject_id = ? AND resource_type = ?',
+                params: ['plugin', plugin.data[0].plugin_code, 'filesystem_directory'],
+            }]
+            : []),
         { sql: 'DELETE FROM tp_setting WHERE plugin_id = ?' },
         { sql: 'DELETE FROM tp_menu WHERE plugin_id = ?' },
         { sql: 'DELETE FROM tp_plugin WHERE id = ?' },
     ];
-    return transaction(sqls.map(s => ({ ...s, params: [pluginId] })));
+    return transaction(sqls.map(s => ({ ...s, params: s.params ?? [pluginId] })));
 }
 
 export async function batchDeletePlugins(pluginIds: number[]): Promise<Response> {
     if (pluginIds.length === 0) return Response.ok({ deleted: 0 });
+    const pluginCodes: string[] = [];
     for (const id of pluginIds) {
         const plugin = await query('SELECT plugin_code FROM tp_plugin WHERE id = ?', [id]);
         if (plugin.code === 1 && plugin.data[0]?.plugin_code) {
-            await execDestroyScript(plugin.data[0].plugin_code);
-            await cleanupPluginTables(plugin.data[0].plugin_code);
-            await cleanupPluginPrivateStorage(plugin.data[0].plugin_code);
+            const pluginCode = plugin.data[0].plugin_code;
+            pluginCodes.push(pluginCode);
+            await execDestroyScript(pluginCode);
+            await cleanupPluginTables(pluginCode);
+            await cleanupPluginPrivateStorage(pluginCode);
         }
     }
     return transaction([
+        ...pluginCodes.map(pluginCode => ({
+            sql: 'DELETE FROM access_grant WHERE subject_type = ? AND subject_id = ? AND resource_type = ?',
+            params: ['plugin', pluginCode, 'filesystem_directory'],
+        })),
         buildBatchDeleteSql('tp_setting', 'plugin_id', pluginIds),
         buildBatchDeleteSql('tp_menu', 'plugin_id', pluginIds),
         buildBatchDeleteSql('tp_plugin', 'id', pluginIds),
@@ -135,27 +148,35 @@ export async function getAllSettings(): Promise<Response> {
 /**
  * Records durable directory authorization independently from plugin settings.
  * `permissionKey` is a stable identifier chosen in plugin source code. A
- * matching `dir` setting is updated only so the trusted system settings page
- * can display the actual selected path.
+ * matching `dir` setting stores the current path and grant ID. Later reads
+ * use that setting as the path source, while this grant only verifies it.
  */
-export async function grantPluginDirectoryPermission(pluginCode: string, permissionKey: string, candidateGrantId: string, path: string, displayName: string): Promise<Response> {
-    const existing = await query(`SELECT grant_id FROM access_grant WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? LIMIT 1`, [pluginCode, permissionKey]);
-    if (existing.code !== 1) return existing;
-    const grantId = existing.data[0]?.grant_id ?? candidateGrantId;
+export async function grantPluginDirectoryPermission(pluginCode: string, permissionKey: string, path: string, displayName: string): Promise<Response> {
+    const setting = await query(`SELECT ts.param_value FROM tp_setting ts JOIN tp_plugin tp ON tp.id = ts.plugin_id WHERE tp.plugin_code = ? AND ts.param_key = ? AND ts.param_type = 'dir' LIMIT 1`, [pluginCode, permissionKey]);
+    if (setting.code !== 1) return setting;
+    // Granting follows a successful settings write in the same user flow.
+    // Compare normalized host paths directly here; hashing is only the public
+    // verification contract and must not prevent the initial authorization.
+    if (!setting.data[0] || normalizeDirectoryPath(setting.data[0].param_value) !== normalizeDirectoryPath(path)) {
+        return Response.errorPermission('目录设置与待授权目录不一致，请重新选择目录');
+    }
+    const grantId = crypto.randomUUID();
     const now = Date.now();
-    const saved = await execute(`INSERT INTO access_grant (grant_id, subject_type, subject_id, resource_type, permission_key, resource_locator, resource_display_name, access_scope, status, granted_by, granted_at, revoked_at, created_at, updated_at)
-      VALUES (?, 'plugin', ?, 'filesystem_directory', ?, ?, ?, 'read_write', 'active', 'user_selection', ?, NULL, ?, ?)
-      ON CONFLICT(grant_id) DO UPDATE SET permission_key = excluded.permission_key, resource_locator = excluded.resource_locator, resource_display_name = excluded.resource_display_name, status = 'active', revoked_at = NULL, updated_at = excluded.updated_at`, [grantId, pluginCode, permissionKey, path, displayName, now, now, now]);
+    const saved = await transaction([
+        { sql: "UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? AND status = 'active'", params: [now, now, pluginCode, permissionKey] },
+        { sql: "INSERT INTO access_grant (grant_id, subject_type, subject_id, resource_type, permission_key, resource_locator, resource_display_name, access_scope, status, granted_by, granted_at, revoked_at, created_at, updated_at) VALUES (?, 'plugin', ?, 'filesystem_directory', ?, ?, ?, 'read_write', 'active', 'user_selection', ?, NULL, ?, ?)", params: [grantId, pluginCode, permissionKey, path, displayName, now, now, now] },
+        { sql: "UPDATE tp_setting SET access_grant_id = ?, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND param_type = 'dir'", params: [grantId, now, pluginCode, permissionKey] },
+    ]);
     if (saved.code !== 1) return saved;
-    const projection = await execute(`UPDATE tp_setting SET param_value = ?, access_grant_id = ?, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND param_type = 'dir'`, [path, grantId, now, pluginCode, permissionKey]);
-    if (projection.code !== 1) return projection;
     return Response.ok({ grant_id: grantId, resource_locator: path, resource_display_name: displayName });
 }
 
-export async function getPluginDirectoryPermission(pluginCode: string, permissionKey: string): Promise<Response> {
-    const res = await query(`SELECT grant_id, resource_locator, resource_display_name, status FROM access_grant WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? AND status = 'active' LIMIT 1`, [pluginCode, permissionKey]);
-    if (res.code !== 1 || !res.data[0]) return Response.errorPermission('目录授权不存在、已撤销或引用已过期');
-    return Response.ok(res.data[0]);
+export async function verifyPluginDirectoryGrant(pluginCode: string, permissionKey: string, accessGrantId: string, pathHash: string): Promise<Response> {
+    const verified = await query(`SELECT grant_id, resource_locator, resource_display_name FROM access_grant WHERE subject_type = ? AND subject_id = ? AND resource_type = ? AND grant_id = ? AND permission_key = ? AND status = 'active' LIMIT 1`, ['plugin', pluginCode, 'filesystem_directory', accessGrantId, permissionKey]);
+    const record = verified.code === 1 ? verified.data[0] : undefined;
+    if (!record) return Response.errorPermission('目录授权不存在、已撤销或引用已过期');
+    if (await directoryPathHash(record.resource_locator) !== pathHash) return Response.errorPermission('目录设置与当前授权不一致，请重新授权');
+    return Response.ok(record);
 }
 
 export async function revokePluginDirectoryPermission(pluginCode: string, permissionKey: string): Promise<Response> {
@@ -165,14 +186,17 @@ export async function revokePluginDirectoryPermission(pluginCode: string, permis
     const grantId = current.data[0].grant_id;
     const revoked = await execute(`UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE grant_id = ? AND subject_type = 'plugin' AND subject_id = ?`, [now, now, grantId, pluginCode]);
     if (revoked.code !== 1) return revoked;
-    const projection = await execute(`UPDATE tp_setting SET param_value = '', access_grant_id = NULL, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND access_grant_id = ?`, [now, pluginCode, permissionKey, grantId]);
-    return projection.code === 1 ? Response.ok({ grant_id: grantId }) : projection;
+    return Response.ok({ grant_id: grantId });
 }
 
 /** Trusted host settings UI entry: paths never cross the plugin bridge. */
 export async function selectPluginStorageDirectory(pluginCode: string, settingKey: string, path: string): Promise<Response> {
     const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
-    return grantPluginDirectoryPermission(pluginCode, settingKey, crypto.randomUUID(), path, name);
+    const configured = await setPluginDirectorySetting(pluginCode, settingKey, path);
+    if (configured.code !== 1) return configured;
+    const granted = await grantPluginDirectoryPermission(pluginCode, settingKey, path, name);
+    if (granted.code !== 1) return granted;
+    return granted;
 }
 
 /**
@@ -852,7 +876,9 @@ export async function getSettingsByPluginCode(pluginCode: string): Promise<Respo
         WHERE tp.plugin_code = ?
         ORDER BY ts.id
     `;
-    return query(sql, [pluginCode]);
+    const result = await query(sql, [pluginCode]);
+    if (result.code !== 1) return result;
+    return Response.ok(await Promise.all(result.data.map(projectPluginSetting)));
 }
 
 export async function saveSettingsByPluginCode(pluginCode: string, settings: Array<{ id: number; param_value: string }>): Promise<Response> {
@@ -886,7 +912,7 @@ export async function getSettingByKey(pluginCode: string, paramKey: string): Pro
     `;
     const res = await query(sql, [pluginCode, paramKey]);
     if (res.code === 1 && res.data.length > 0) {
-        return Response.ok(res.data[0]);
+        return Response.ok(await projectPluginSetting(res.data[0]));
     }
     return Response.errorNotFound(`设置项 ${paramKey} 不存在`);
 }
@@ -916,6 +942,34 @@ export async function upsertSettingByKey(pluginCode: string, paramKey: string, v
          VALUES (?, ?, ?, 'input', ?, '', ?, ?, ?)`,
         [settingKey, paramKey, paramKey, value, pluginId, now, now]
     );
+}
+
+/** Updates only the configured path for a directory setting and invalidates its old binding. */
+export async function setPluginDirectorySetting(pluginCode: string, paramKey: string, path: string): Promise<Response> {
+    const now = Date.now();
+    return execute(`UPDATE tp_setting SET param_value = ?, access_grant_id = NULL, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND param_type = 'dir'`, [path, now, pluginCode, paramKey]);
+}
+
+async function projectPluginSetting(setting: any) {
+    if (setting.param_type !== 'dir') return { key: setting.param_key, value: setting.param_value };
+    const path = String(setting.param_value || '');
+    return {
+        key: setting.param_key,
+        paramType: 'dir',
+        accessGrantId: setting.access_grant_id ?? null,
+        pathHash: path ? await directoryPathHash(path) : null,
+        directoryName: path ? path.split(/[\\/]/).filter(Boolean).pop() || path : null,
+    };
+}
+
+export async function directoryPathHash(path: string): Promise<string> {
+    const normalized = normalizeDirectoryPath(path);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
+    return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join('');
+}
+
+function normalizeDirectoryPath(path: string): string {
+    return String(path).replace(/\\/g, '/').replace(/\/+$/, '') || '/';
 }
 
 /**

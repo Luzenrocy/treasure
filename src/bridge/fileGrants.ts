@@ -51,6 +51,11 @@ export class FileGrantService {
     return grant;
   }
 
+  /** Issues a fresh, session-scoped reference for a durable authorization. */
+  issueDirectoryReference(pluginCode: string, path: string, rootGrantId: string): DirectoryGrant {
+    return this.grant(pluginCode, path, 'directory', undefined, rootGrantId) as DirectoryGrant;
+  }
+
   /** Restores a host-persisted access grant after an application restart. */
   restoreDirectory(pluginCode: string, id: string, path: string, name: string): DirectoryGrant {
     this.grants.set(id, { pluginCode, path, kind: 'directory', rootGrantId: id });
@@ -87,6 +92,12 @@ export class FileGrantService {
     if (!path) return false;
     this.grants.delete(id);
     return true;
+  }
+
+  revokeRootGrant(pluginCode: string, rootGrantId: string): void {
+    for (const [id, record] of this.grants) {
+      if (record.pluginCode === pluginCode && (id === rootGrantId || record.rootGrantId === rootGrantId)) this.grants.delete(id);
+    }
   }
 
   resolveOutputPath(pluginCode: string, directoryId: string, fileName: string): string | undefined {

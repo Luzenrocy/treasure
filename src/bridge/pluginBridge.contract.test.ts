@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { capabilityRegistry, isExpectedPluginOrigin, toResult } from './pluginBridge';
 
-describe('plugin bridge SDK 2.0 contract', () => {
+describe('plugin bridge SDK 2.1 contract', () => {
   it('only registers stable typed operations at the 2.0 platform boundary', () => {
     expect(Object.keys(capabilityRegistry)).toEqual(expect.arrayContaining([
       'files.openDialog', 'files.saveDialog', 'files.readFile', 'files.writeFile',
@@ -9,7 +9,7 @@ describe('plugin bridge SDK 2.0 contract', () => {
       'storage.read', 'storage.write', 'storage.remove',
       'database.query', 'database.execute', 'database.transaction',
       'settings.get', 'settings.set', 'settings.list',
-      'permissions.grantDirectory', 'permissions.getDirectory', 'permissions.revokeDirectory',
+      'permissions.grantDirectory', 'permissions.verifyDirectoryGrant', 'permissions.revokeDirectory',
       'menus.register', 'menus.unregister', 'notifications.send', 'logs.write',
     ]));
     expect(capabilityRegistry['files.writeFile']!.validate({ directory: { id: 'dir' }, fileName: '报告.txt', data: new Uint8Array([1]) })).toBe(true);

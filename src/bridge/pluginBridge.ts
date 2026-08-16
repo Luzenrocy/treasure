@@ -24,7 +24,7 @@ import { PluginSqlExecutor } from './pluginSqlExecutor';
 import { mkdir, readDir, readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { getDirectoryAccessGrant, getPluginDirectoryPermission, getSettingsByPluginCode, grantPluginDirectoryPermission, revokePluginDirectoryPermission, saveSettingsByPluginCode, getSettingByKey, upsertSettingByKey } from '@/sql/platformService';
+import { getDirectoryAccessGrant, getSettingsByPluginCode, grantPluginDirectoryPermission, revokePluginDirectoryPermission, saveSettingsByPluginCode, getSettingByKey, setPluginDirectorySetting, upsertSettingByKey, verifyPluginDirectoryGrant } from '@/sql/platformService';
 import { useMenuRegistry } from '@/store/menuRegistry';
 import { useTabsStore } from '@/store/tabs';
 import { logEvent } from '@/utils/logger';
@@ -57,7 +57,7 @@ function errorMessage(error: unknown): string {
     return '宿主操作失败';
 }
 
-/** Single protocol authority for the public SDK 2.0 operations. */
+/** Single protocol authority for the public SDK 2.1 operations. */
 export const capabilityRegistry: Record<string, CapabilityRegistration> = {
     'database.query': { capability: 'database', action: 'query', minPlatformVersion: '2.0.0', validate: p => typeof p?.sql === 'string' && Array.isArray(p?.tables) },
     'database.execute': { capability: 'database', action: 'execute', minPlatformVersion: '2.0.0', validate: p => typeof p?.sql === 'string' && Array.isArray(p?.tables) },
@@ -74,9 +74,9 @@ export const capabilityRegistry: Record<string, CapabilityRegistration> = {
     'storage.remove': { capability: 'storage', action: 'deleteStorageFile', minPlatformVersion: '2.0.0', validate: p => typeof p?.key === 'string' },
     'settings.list': { capability: 'settings', action: 'getSettings', minPlatformVersion: '2.0.0', validate: () => true },
     'settings.get': { capability: 'settings', action: 'getSettingByKey', minPlatformVersion: '2.0.0', validate: p => typeof p?.key === 'string' },
-    'settings.set': { capability: 'settings', action: 'saveSettingByKey', minPlatformVersion: '2.0.0', validate: p => typeof p?.key === 'string' && typeof p?.value === 'string' },
+    'settings.set': { capability: 'settings', action: 'saveSettingByKey', minPlatformVersion: '2.0.0', validate: p => typeof p?.key === 'string' && (typeof p?.value === 'string' || typeof p?.directory?.id === 'string') },
     'permissions.grantDirectory': { capability: 'permissions', action: 'grantDirectory', minPlatformVersion: '2.0.0', validate: p => isPermissionKey(p?.permissionKey) && typeof p?.directory?.id === 'string' },
-    'permissions.getDirectory': { capability: 'permissions', action: 'getGrantedDirectory', minPlatformVersion: '2.0.0', validate: p => isPermissionKey(p?.permissionKey) },
+    'permissions.verifyDirectoryGrant': { capability: 'permissions', action: 'verifyDirectoryGrant', minPlatformVersion: '2.0.0', validate: p => isPermissionKey(p?.permissionKey) && typeof p?.accessGrantId === 'string' && typeof p?.pathHash === 'string' },
     'permissions.revokeDirectory': { capability: 'permissions', action: 'revokeDirectory', minPlatformVersion: '2.0.0', validate: p => isPermissionKey(p?.permissionKey) },
     'menus.register': { capability: 'menus', action: 'registerMenu', minPlatformVersion: '2.0.0', validate: p => typeof p?.menuId === 'string' && Array.isArray(p?.items) },
     'menus.unregister': { capability: 'menus', action: 'unregisterMenu', minPlatformVersion: '2.0.0', validate: p => typeof p?.id === 'string' },
@@ -110,18 +110,14 @@ export function toResult(data: any, operation?: string) {
     if (data?.ok === true || data?.ok === false) return data;
     if (data?.code === 1) {
         const value = data.data;
-        // Settings are the one array-shaped non-database response.  Normalize
-        // the legacy host records before applying the database rows envelope.
+        // Settings are the one array-shaped non-database response. The SQL
+        // service has already removed directory paths from directory settings.
         if (Array.isArray(value)) {
             if (operation === 'database.transaction') return { ok: true, value };
-            if (operation?.startsWith('settings.') && value.every(item => item && typeof item === 'object' && 'param_key' in item)) {
-                return { ok: true, value: value.map(item => ({ key: item.param_key, value: item.param_value })) };
-            }
+            if (operation?.startsWith('settings.')) return { ok: true, value: value.map(item => item && typeof item === 'object' && 'param_key' in item ? { key: item.param_key, value: item.param_value } : item) };
             return { ok: true, value: { rows: value } };
         }
-        if (value && typeof value === 'object' && 'param_key' in value) {
-            return { ok: true, value: { key: value.param_key, value: value.param_value } };
-        }
+        if (operation?.startsWith('settings.') && value && typeof value === 'object') return { ok: true, value: 'param_key' in value ? { key: value.param_key, value: value.param_value } : value };
         if (value && typeof value === 'object' && ('rowsAffected' in value || 'lastInsertId' in value)) {
             return { ok: true, value: { affectedRows: value.rowsAffected || 0, lastInsertId: value.lastInsertId || 0, rows: value.rows } };
         }
@@ -203,7 +199,7 @@ export function initPluginBridge() {
         if (action === 'registerMenu') data.reg = payload;
         if (action === 'unregisterMenu') data.menuId = payload.id;
         if (action === 'getSettingByKey') data.paramKey = payload.key;
-        if (action === 'saveSettingByKey') { data.paramKey = payload.key; data.paramValue = payload.value; }
+        if (action === 'saveSettingByKey') { data.paramKey = payload.key; data.paramValue = payload.value; data.directory = payload.directory; }
 
         if (!pluginCode || !action) {
             sendResponse(source, origin, requestId, { ok: false, error: { code: 'PERMISSION_DENIED', message: '插件身份或能力无效' } });
@@ -384,7 +380,6 @@ export function initPluginBridge() {
 
                 case 'getSettings': {
                     result = await getSettingsByPluginCode(pluginCode);
-                    if (result?.code === 1 && Array.isArray(result.data)) result.data = result.data.filter((setting: any) => setting.param_type !== 'dir');
                     break;
                 }
 
@@ -397,45 +392,47 @@ export function initPluginBridge() {
                 case 'getSettingByKey': {
                     const { paramKey } = data;
                     result = await getSettingByKey(pluginCode, paramKey);
-                    if (result?.code === 1 && result.data?.param_type === 'dir') result = { ok: false, error: { code: 'PERMISSION_DENIED', message: '目录设置仅能通过目录授权接口读取' } };
                     break;
                 }
 
                 // ── 按 key 保存单个配置（不存在则插入） ────────
                 case 'saveSettingByKey': {
                     const { paramKey, paramValue } = data;
-                    result = paramKey === 'storage_dir'
-                        ? { ok: false, error: { code: 'PERMISSION_DENIED', message: '目录设置仅能通过目录授权接口更新' } }
-                        : await upsertSettingByKey(pluginCode, paramKey, paramValue);
+                    if (data.directory) {
+                        const path = await resolveGrantedDirectory(pluginCode, data.directory.id);
+                        result = path ? await setPluginDirectorySetting(pluginCode, paramKey, path) : await deniedDirectoryAccess(pluginCode, action, data.directory.id);
+                    } else {
+                        result = await upsertSettingByKey(pluginCode, paramKey, paramValue);
+                    }
                     break;
                 }
 
                 case 'grantDirectory': {
                     const path = await resolveGrantedDirectory(pluginCode, data.directory?.id);
                     if (!path) { result = await deniedDirectoryAccess(pluginCode, action, data.directory?.id); break; }
-                    result = await grantPluginDirectoryPermission(pluginCode, data.permissionKey, data.directory.id, path, data.directory.name);
+                    result = await grantPluginDirectoryPermission(pluginCode, data.permissionKey, path, data.directory.name);
                     if (result?.code === 1) {
                         const grant = result.data;
                         result = {
                             ok: true,
-                            value: fileGrants.restoreDirectory(pluginCode, grant.grant_id, grant.resource_locator, grant.resource_display_name),
+                            value: { accessGrantId: grant.grant_id, directory: fileGrants.issueDirectoryReference(pluginCode, grant.resource_locator, grant.grant_id) },
                         };
                     }
                     break;
                 }
 
-                case 'getGrantedDirectory': {
-                    const storageDirectory = await getPluginDirectoryPermission(pluginCode, data.permissionKey);
+                case 'verifyDirectoryGrant': {
+                    const storageDirectory = await verifyPluginDirectoryGrant(pluginCode, data.permissionKey, data.accessGrantId, data.pathHash);
                     if (storageDirectory.code !== 1) { result = storageDirectory; break; }
                     const record = storageDirectory.data;
-                    result = { ok: true, value: fileGrants.restoreDirectory(pluginCode, record.grant_id, record.resource_locator, record.resource_display_name) };
+                    result = { ok: true, value: { accessGrantId: record.grant_id, directory: fileGrants.issueDirectoryReference(pluginCode, record.resource_locator, record.grant_id) } };
                     break;
                 }
 
                 case 'revokeDirectory': {
                     const revoked = await revokePluginDirectoryPermission(pluginCode, data.permissionKey);
                     if (revoked.code !== 1) { result = revoked; break; }
-                    fileGrants.revokeDirectory(pluginCode, revoked.data.grant_id);
+                    fileGrants.revokeRootGrant(pluginCode, revoked.data.grant_id);
                     result = { ok: true, value: undefined };
                     break;
                 }

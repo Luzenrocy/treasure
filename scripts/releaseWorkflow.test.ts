@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const root = resolve(import.meta.dirname, '..');
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
 
-describe('2.0.0 release configuration', () => {
+describe('2.1.0 release configuration', () => {
   it('keeps the frontend, Tauri, and Rust package versions in sync', () => {
     const packageVersion = JSON.parse(read('package.json')).version;
     const tauriVersion = JSON.parse(read('src-tauri/tauri.conf.json')).version;
@@ -16,7 +16,7 @@ describe('2.0.0 release configuration', () => {
       /\[\[package\]\]\nname = "treasure"\nversion = "([^"]+)"/,
     )?.[1];
 
-    expect(packageVersion).toBe('2.0.0');
+    expect(packageVersion).toBe('2.1.0');
     expect(tauriVersion).toBe(packageVersion);
     expect(cargoVersion).toBe(packageVersion);
     expect(cargoLockVersion).toBe(packageVersion);

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), save: vi.fn(), readFile: vi.fn(), writeFile: vi.fn(), mkdir: vi.fn(), readDir: vi.fn(),
   invoke: vi.fn(), logEvent: vi.fn(), register: vi.fn(), unregister: vi.fn(),
-  query: vi.fn(), execute: vi.fn(), transaction: vi.fn(), getDirectoryAccessGrant: vi.fn(), grantPluginDirectoryPermission: vi.fn(), getPluginDirectoryPermission: vi.fn(), revokePluginDirectoryPermission: vi.fn(),
+  query: vi.fn(), execute: vi.fn(), transaction: vi.fn(), getDirectoryAccessGrant: vi.fn(), grantPluginDirectoryPermission: vi.fn(), verifyPluginDirectoryGrant: vi.fn(), revokePluginDirectoryPermission: vi.fn(), setPluginDirectorySetting: vi.fn(),
   isPermissionGranted: vi.fn(), requestPermission: vi.fn(), sendNotification: vi.fn(),
 }));
 
@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('@tauri-apps/api/path', () => ({ appDataDir: vi.fn().mockResolvedValue('/app') }));
 vi.mock('@tauri-apps/plugin-notification', () => ({ isPermissionGranted: mocks.isPermissionGranted, requestPermission: mocks.requestPermission, sendNotification: mocks.sendNotification }));
 vi.mock('@/utils/logger', () => ({ logEvent: mocks.logEvent }));
-vi.mock('@/sql/platformService', () => ({ getSettingsByPluginCode: mocks.query, saveSettingsByPluginCode: mocks.execute, getSettingByKey: mocks.query, upsertSettingByKey: mocks.execute, getDirectoryAccessGrant: mocks.getDirectoryAccessGrant, grantPluginDirectoryPermission: mocks.grantPluginDirectoryPermission, getPluginDirectoryPermission: mocks.getPluginDirectoryPermission, revokePluginDirectoryPermission: mocks.revokePluginDirectoryPermission }));
+vi.mock('@/sql/platformService', () => ({ getSettingsByPluginCode: mocks.query, saveSettingsByPluginCode: mocks.execute, getSettingByKey: mocks.query, upsertSettingByKey: mocks.execute, setPluginDirectorySetting: mocks.setPluginDirectorySetting, getDirectoryAccessGrant: mocks.getDirectoryAccessGrant, grantPluginDirectoryPermission: mocks.grantPluginDirectoryPermission, verifyPluginDirectoryGrant: mocks.verifyPluginDirectoryGrant, revokePluginDirectoryPermission: mocks.revokePluginDirectoryPermission }));
 vi.mock('@/store/menuRegistry', () => ({ useMenuRegistry: () => ({ register: mocks.register, unregister: mocks.unregister }) }));
 vi.mock('@/store/tabs', () => ({ useTabsStore: () => ({ activePluginCode: 'trusted-plugin' }) }));
 vi.mock('./pluginSqlExecutor', () => ({ PluginSqlExecutor: class { executeRequest = mocks.execute; } }));
@@ -31,8 +31,8 @@ beforeEach(() => {
   mocks.readFile.mockResolvedValue(new Uint8Array([1, 2]));
   mocks.invoke.mockResolvedValue({ sql: 'SELECT 1' });
   mocks.transaction.mockResolvedValue({ code: 1, data: {} });
-  mocks.grantPluginDirectoryPermission.mockResolvedValue({ code: 1, data: { grant_id: 'file-grant-1', resource_locator: '/tmp/报告.txt', resource_display_name: '报告.txt' } });
-  mocks.getPluginDirectoryPermission.mockResolvedValue({ code: 1, data: { grant_id: 'file-grant-1', resource_locator: '/tmp/报告.txt', resource_display_name: '报告.txt' } });
+  mocks.grantPluginDirectoryPermission.mockResolvedValue({ code: 1, data: { grant_id: 'grant-1', resource_locator: '/tmp/报告.txt', resource_display_name: '报告.txt' } });
+  mocks.verifyPluginDirectoryGrant.mockResolvedValue({ code: 1, data: { grant_id: 'grant-1', resource_locator: '/tmp/报告.txt', resource_display_name: '报告.txt' } });
   mocks.revokePluginDirectoryPermission.mockResolvedValue({ code: 1, data: { grant_id: 'file-grant-1' } });
   mocks.getDirectoryAccessGrant.mockResolvedValue({ code: 1, data: { grant_id: 'active-root', resource_locator: '/tmp/报告.txt', resource_display_name: '报告.txt', status: 'active' } });
   mocks.isPermissionGranted.mockResolvedValue(true);
@@ -115,9 +115,9 @@ describe('plugin bridge dispatch', () => {
 
   it('binds a user-selected directory to a plugin-defined permission key without exposing its path', async () => {
     const directory = await request('files.openDialog', { kind: 'directory' });
-    await expect(request('permissions.grantDirectory', { permissionKey: 'notes_directory', directory: directory.value })).resolves.toMatchObject({ ok: true, value: { id: 'file-grant-1', kind: 'directory' } });
-    expect(mocks.grantPluginDirectoryPermission).toHaveBeenCalledWith('trusted-plugin', 'notes_directory', directory.value.id, '/tmp/报告.txt', '报告.txt');
-    await expect(request('permissions.getDirectory', { permissionKey: 'notes_directory' })).resolves.toMatchObject({ ok: true, value: { id: 'file-grant-1', kind: 'directory' } });
+    await expect(request('permissions.grantDirectory', { permissionKey: 'notes_directory', directory: directory.value })).resolves.toMatchObject({ ok: true, value: { accessGrantId: 'grant-1', directory: { kind: 'directory' } } });
+    expect(mocks.grantPluginDirectoryPermission).toHaveBeenCalledWith('trusted-plugin', 'notes_directory', '/tmp/报告.txt', '报告.txt');
+    await expect(request('permissions.verifyDirectoryGrant', { permissionKey: 'notes_directory', accessGrantId: 'grant-1', pathHash: 'hash' })).resolves.toMatchObject({ ok: true, value: { accessGrantId: 'grant-1', directory: { kind: 'directory' } } });
     await expect(request('permissions.revokeDirectory', { permissionKey: 'notes_directory' })).resolves.toEqual({ ok: true, value: undefined });
   });
 

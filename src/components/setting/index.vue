@@ -49,10 +49,9 @@
               readonly
               v-bind="safeJsonParse(item.param_properties, {})"
               :placeholder="item.param_placeholder"
-              @click="loadLocalDir(item)"
             >
               <template #append>
-                <el-button @click="loadLocalDir(item)" icon="Folder">选择</el-button>
+                <el-button @click.stop="loadLocalDir(item)" icon="Folder">选择</el-button>
               </template>
             </el-input>
             <el-select 
@@ -130,6 +129,7 @@
 import { defineComponent } from 'vue';
 import { getSettings, saveSetting } from '@/sql/service';
 import { selectPluginStorageDirectory } from '@/sql/platformService';
+import { applySelectedDirectory } from './directorySetting';
 import { ElMessage } from 'element-plus';
 import {useMenuStore} from "@/store/menu";
 import { open } from '@tauri-apps/plugin-dialog';
@@ -276,10 +276,8 @@ export default defineComponent({
           if (item.param_key === 'storage_dir') {
             const bound = await selectPluginStorageDirectory(item.plugin_code, item.param_key, selected);
             if (bound.code !== 1) throw new Error(bound.msg || '目录授权绑定失败');
-            item.param_value = bound.data.path;
-            item.directory_display_name = bound.data.name;
-            item.directory_status = 'active';
-          } else item.param_value = selected;
+            if (!applySelectedDirectory(item, selected, bound.data)) throw new Error('目录授权返回的路径为空');
+          } else applySelectedDirectory(item, selected);
         }
       } catch (error) {
         console.error('选择目录失败:', error);
