@@ -2,10 +2,10 @@
   <div class="card-view">
     <el-row :gutter="20">
       <el-col v-for="plugin in plugins" :key="plugin.pluginId" :span="6" style="padding: 0 5px 10px">
-        <el-card class="plugin-card" :ref="'plugin-'+plugin.pluginId" @click="toggleSelection(plugin.pluginId)">
+        <el-card class="plugin-card" :class="{ 'plugin-selected': selectedPlugins.includes(plugin.pluginId) }" @click="toggleSelection(plugin.pluginId)">
           <div class="card-content" >
             <div class="image-container">
-              <PluginIcon :iconRef="plugin.pluginIcon" :pluginCode="plugin.pluginCode" :size="64" :fallback="plugin.menuIcon || 'Document'" />
+              <PluginIcon :iconRef="plugin.pluginIcon" :pluginCode="plugin.pluginCode" :size="64" fallback="Document" />
             </div>
             <div class="info">
               <h3 @click.stop="openPlugin(plugin)">{{ plugin.pluginAlias }}</h3>
@@ -61,14 +61,7 @@ export default defineComponent({
     },
     // 切换选中状态
     toggleSelection (pluginId: number)  {
-      const el = (this.$refs['plugin-'+pluginId] as any)[0].$el;
-      if(el.classList.contains("plugin-selected")){
-        el.classList.remove("plugin-selected")
-        this.selectedPlugins.splice(this.selectedPlugins.indexOf(pluginId),1)
-      }else{
-        el.classList.add("plugin-selected")
-        this.selectedPlugins.push(pluginId)
-      }
+      this.$emit('toggle-selection', pluginId)
     },
     // 判断是否已选中
     isSelected () {

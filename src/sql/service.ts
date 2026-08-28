@@ -48,6 +48,10 @@ export async function createDebugPlugin(payload: { pluginCode: string; pluginAli
     return service.createDebugPlugin(payload);
 }
 
+export async function syncDebugPluginManifest(payload: { pluginId: number; pluginCode: string; debugUrl: string; manifest: any }): Promise<Response> {
+    return service.syncDebugPluginManifest(payload);
+}
+
 export async function updatePluginMenuHidden(pluginId: number, pluginAlias: string, hidden: number): Promise<Response> {
     return service.updatePluginMenuHidden(pluginId, pluginAlias, hidden);
 }

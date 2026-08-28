@@ -51,6 +51,8 @@ export default defineComponent({
       return resolved.value?.src || props.fallback;
     });
 
+    const fallbackIcon = computed(() => isPresetIcon(props.fallback) ? props.fallback : 'Document');
+
     /** 图标加载失败标记 */
     const imageError = ref(false);
 
@@ -82,6 +84,10 @@ export default defineComponent({
 
       const normalized = trimmed.replace(/\\/g, '/').trim().replace(/^\.\//, '').replace(/^\//, '');
       if (!normalized) return;
+      if (!normalized.toLowerCase().endsWith('.svg')) {
+        imageError.value = true;
+        return;
+      }
 
       try {
         const appDataPath = await appDataDir();
@@ -93,6 +99,7 @@ export default defineComponent({
       } catch (e) {
         console.warn('[PluginIcon] resolve path icon failed:', e);
         svgContent.value = '';
+        imageError.value = true;
       }
     }
 
@@ -118,6 +125,7 @@ export default defineComponent({
       handleImageError,
       isPreset,
       svgContent,
+      fallbackIcon,
     };
   },
 });
@@ -138,8 +146,8 @@ export default defineComponent({
   />
 
   <!-- 降级：加载失败时显示 fallback -->
-  <el-icon v-else-if="imageError" :size="size">
-    <component :is="fallback" />
+  <el-icon v-else :size="size">
+    <component :is="fallbackIcon" />
   </el-icon>
 </template>
 

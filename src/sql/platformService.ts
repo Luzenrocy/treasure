@@ -1,6 +1,7 @@
 import { query, execute, transaction, buildBatchDeleteSql } from '@/sql/common';
 import { readonlyTransaction, normalizeError } from '@/sql/dbClient';
 import { Response } from '@/class';
+import { buildDebugIconDownloadPlan } from '@/utils/debugPluginAssets';
 
 export const PLUGIN_TYPE_NORMAL = 0;
 export const PLUGIN_TYPE_DEBUG = 1;
@@ -501,6 +502,12 @@ export async function createDebugPlugin({ pluginCode, pluginAlias, debugUrl, man
         if (!validation.valid) {
             return Response.errorParam(`manifest 校验失败: ${validation.errors.join('; ')}`);
         }
+        try {
+            // 先验证并缓存图标；静态资源不可用时不留下一个“注册成功但没有图标”的插件。
+            await downloadPluginIcons(pluginCode, manifest, debugUrl);
+        } catch (e) {
+            return Response.error(`调试插件图标同步失败: ${normalizeError(e)}`);
+        }
     }
     const now = Date.now();
     const tempUid = existingDebugPlugin?.plugin_uid || crypto.randomUUID();
@@ -533,11 +540,6 @@ export async function createDebugPlugin({ pluginCode, pluginAlias, debugUrl, man
         await provisionPluginResources(pluginId, pluginCode, manifest, now);
     }
 
-    // 下载自定义图标到 AppData（plugin:// 协议只能访问本地文件）
-    if (manifest) {
-        await downloadPluginIcons(pluginCode, manifest, debugUrl);
-    }
-
     // 写入所有版本化 init 脚本到 AppData 后执行增量迁移
     if (initScripts && Object.keys(initScripts).length > 0) {
         try {
@@ -558,6 +560,69 @@ export async function createDebugPlugin({ pluginCode, pluginAlias, debugUrl, man
     }
 
     return Response.ok({ pluginId });
+}
+
+/**
+ * 同步调试插件的 manifest 元数据、菜单图标和参数定义。
+ * 图标文件先下载完成，再写入数据库，避免 UI 指向不存在的本地资源。
+ */
+export async function syncDebugPluginManifest({
+    pluginId,
+    pluginCode,
+    debugUrl,
+    manifest,
+}: {
+    pluginId: number;
+    pluginCode: string;
+    debugUrl: string;
+    manifest: any;
+}): Promise<Response> {
+    if (manifest?.name !== pluginCode) {
+        return Response.errorParam(`manifest.name "${manifest?.name}" 与 pluginCode "${pluginCode}" 不一致`);
+    }
+    const validation = validateManifest(manifest);
+    if (!validation.valid) {
+        return Response.errorParam(`manifest 校验失败: ${validation.errors.join('; ')}`);
+    }
+
+    const pluginRes = await getPluginByCode(pluginCode);
+    if (pluginRes.code !== 1 || pluginRes.data.id !== pluginId || pluginRes.data.plugin_type !== PLUGIN_TYPE_DEBUG) {
+        return Response.errorNotFound('调试插件不存在或已变更');
+    }
+
+    try {
+        await downloadPluginIcons(pluginCode, manifest, debugUrl);
+    } catch (e) {
+        return Response.error(`调试插件图标同步失败: ${normalizeError(e)}`);
+    }
+
+    const now = Date.now();
+    const updateRes = await transaction([
+        {
+            sql: `UPDATE tp_plugin SET plugin_alias=?, plugin_version=?, plugin_desc=?, plugin_author=?, plugin_icon=?, updated_at=? WHERE id=? AND plugin_code=? AND plugin_type=?`,
+            params: [
+                manifest.alias,
+                manifest.version,
+                manifest.description || '',
+                manifest.author || '',
+                manifest.icon || '',
+                now,
+                pluginId,
+                pluginCode,
+                PLUGIN_TYPE_DEBUG,
+            ],
+        },
+        {
+            sql: `UPDATE tp_menu SET menu_name=?, menu_icon=?, show_order=?, updated_at=? WHERE plugin_id=?`,
+            params: [manifest.menu.name, manifest.menu.icon || '', manifest.menu.order || 0, now, pluginId],
+        },
+    ]);
+    if (updateRes.code !== 1) {
+        return Response.error('调试插件 manifest 元数据更新失败');
+    }
+
+    const settings = await upgradePluginSettings(pluginId, pluginCode, manifest.settings || [], now);
+    return Response.ok(settings);
 }
 
 /**
@@ -983,54 +1048,25 @@ function normalizeDirectoryPath(path: string): string {
  * @param debugUrl 调试服务器地址
  */
 async function downloadPluginIcons(pluginCode: string, manifest: any, debugUrl: string): Promise<void> {
+    const downloadPlan = buildDebugIconDownloadPlan(manifest, debugUrl);
+    if (downloadPlan.length === 0) return;
+
     const { appDataDir } = await import('@tauri-apps/api/path');
     const { mkdir, writeFile } = await import('@tauri-apps/plugin-fs');
+    const { dirname } = await import('@tauri-apps/api/path');
 
     const appDataPath = await appDataDir();
     const pluginDir = `${appDataPath}/plugin/${pluginCode}`;
     await mkdir(pluginDir, { recursive: true });
 
-    const baseUrl = debugUrl.replace(/\/+$/, '');
-
-    async function downloadIcon(iconRef: string): Promise<void> {
-        if (!iconRef || typeof iconRef !== 'string') return;
-        const trimmed = iconRef.trim();
-        if (!trimmed) return;
-
-        // 预设图标名不需要下载
-        if (/^[A-Z][a-zA-Z0-9]*$/.test(trimmed)) return;
-
-        // 规范化路径
-        const normalized = trimmed.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
-        const iconUrl = `${baseUrl}/${normalized}`;
-
-        try {
-            const resp = await fetch(iconUrl);
-            if (!resp.ok) {
-                console.warn(`[debug-plugin] 图标下载失败: ${iconUrl} (status: ${resp.status})`);
-                return;
-            }
-            const blob = await resp.blob();
-            const buffer = await blob.arrayBuffer();
-            const bytes = new Uint8Array(buffer);
-
-            const iconPath = `${pluginDir}/${normalized}`;
-            const { dirname } = await import('@tauri-apps/api/path');
-            const parentDir = await dirname(iconPath);
-            await mkdir(parentDir, { recursive: true });
-            await writeFile(iconPath, bytes);
-            console.log(`[debug-plugin] 图标下载成功: ${iconUrl}`);
-        } catch (e) {
-            console.warn(`[debug-plugin] 图标下载异常: ${iconUrl}`, e);
+    for (const target of downloadPlan) {
+        const resp = await fetch(target.sourceUrl);
+        if (!resp.ok) {
+            throw new Error(`获取 ${target.relativePath} 失败（HTTP ${resp.status}）`);
         }
-    }
-
-    // 下载插件图标
-    if (manifest.icon) {
-        await downloadIcon(manifest.icon);
-    }
-    // 下载菜单图标
-    if (manifest.menu?.icon) {
-        await downloadIcon(manifest.menu.icon);
+        const bytes = new Uint8Array(await resp.arrayBuffer());
+        const iconPath = `${pluginDir}/${target.relativePath}`;
+        await mkdir(await dirname(iconPath), { recursive: true });
+        await writeFile(iconPath, bytes);
     }
 }

@@ -27,7 +27,7 @@
       <el-main class="plugin-manager-container">
         <component :is="currentView"  :plugins="plugins" :selectedPlugins="selectedPlugins"
                   @showDeleteDialog="showDeleteDialog" @editPlugin="editPlugin" @openPlugin="openPlugin"
-                  @syncManifest="syncManifest" />
+                  @syncManifest="syncManifest" @toggle-selection="toggleSelection" />
       </el-main>
     </div>
 
@@ -91,7 +91,7 @@
 import {defineComponent} from "vue";
 import ListView from "@/components/pluginManager/ListView.vue";
 import CardView from "@/components/pluginManager/CardView.vue";
-import {deletePluginById, getPlugins, createDebugPlugin, updatePluginMenuHidden, isDebugSwitchEnabled} from "@/sql/service.ts";
+import {deletePluginById, getPlugins, createDebugPlugin, syncDebugPluginManifest, updatePluginMenuHidden, isDebugSwitchEnabled} from "@/sql/service.ts";
 import {ElMessage} from "element-plus";
 import {Plugin} from '@/class'
 import { open } from '@tauri-apps/plugin-dialog';
@@ -104,6 +104,7 @@ import { useMenuStore } from '@/store/menu';
 import { useTabsStore } from '@/store/tabs';
 import { logEvent } from '@/utils/logger';
 import { findPluginPackageRoot } from './packageImport';
+import { removeSelectedPluginId, retainExistingPluginIds, toggleSelectedPluginId } from './selection';
 
 export default defineComponent({
   name: "pluginManager",
@@ -111,7 +112,7 @@ export default defineComponent({
   data(){
     return {
       plugins: [] as any[],
-      selectedPlugins: [],
+      selectedPlugins: [] as number[],
       viewType: 'list' as 'list' | 'card',
       currentPlugin:  {} as Plugin,
       searchKeyword : '',
@@ -284,10 +285,17 @@ export default defineComponent({
           return;
         }
 
-        // 三向 diff 升级参数（保留用户配置值）
-        const now = Date.now();
-        const pluginId = plugin.pluginId;
-        const results = await upgradePluginSettings(pluginId, pluginCode, manifest.settings || [], now);
+        const res = await syncDebugPluginManifest({
+          pluginId: plugin.pluginId,
+          pluginCode,
+          debugUrl,
+          manifest,
+        });
+        if (res.code !== 1) {
+          ElMessage.error(`同步失败: ${res.msg}`);
+          return;
+        }
+        const results = res.data;
 
         useMenuStore().fetchMenus();
 
@@ -300,6 +308,9 @@ export default defineComponent({
     showDeleteDialog(plugin: any){
       this.currentPlugin = plugin
       this.deleteDialogVisible =true
+    },
+    toggleSelection(pluginId: number) {
+      this.selectedPlugins = toggleSelectedPluginId(this.selectedPlugins, pluginId);
     },
     async handleImport(kind: 'zip' | 'directory') {
       try {
@@ -516,6 +527,7 @@ export default defineComponent({
           ElMessage.error('删除失败: ' + res.msg);
           return;
         }
+        this.selectedPlugins = removeSelectedPluginId(this.selectedPlugins, pluginId);
 
         // 再删除插件文件目录
         if (plugin) {
@@ -543,7 +555,8 @@ export default defineComponent({
         return;
       }
       try {
-        for (const pluginId of this.selectedPlugins) {
+        const pluginIds = [...this.selectedPlugins];
+        for (const pluginId of pluginIds) {
           await this.deletePlugin(pluginId);
         }
         ElMessage.success("批量删除成功");
@@ -557,8 +570,10 @@ export default defineComponent({
       let res = await getPlugins();
       if(res.code != 1){
         ElMessage.error('菜单获取失败！原因：'+res.msg)
+        return;
       }
-      this.plugins = res.data;
+      this.plugins = res.data || [];
+      this.selectedPlugins = retainExistingPluginIds(this.selectedPlugins, this.plugins.map((plugin: any) => plugin.pluginId));
     }
   }
 })
