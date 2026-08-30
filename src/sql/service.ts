@@ -52,8 +52,8 @@ export async function syncDebugPluginManifest(payload: { pluginId: number; plugi
     return service.syncDebugPluginManifest(payload);
 }
 
-export async function updatePluginMenuHidden(pluginId: number, pluginAlias: string, hidden: number): Promise<Response> {
-    return service.updatePluginMenuHidden(pluginId, pluginAlias, hidden);
+export async function updatePluginMetadata(pluginId: number, pluginAlias: string, hidden: number): Promise<Response> {
+    return service.updatePluginMetadata(pluginId, pluginAlias, hidden);
 }
 
 export async function getSettingsByPluginCode(pluginCode: string): Promise<Response> {

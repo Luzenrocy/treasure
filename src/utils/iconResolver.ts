@@ -209,6 +209,12 @@ export function isValidImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has('.' + ext);
 }
 
+/** Decides whether a plugin-local image is rendered inline or through the asset protocol. */
+export function getPathIconRenderKind(path: string): 'inline-svg' | 'image' | null {
+  if (!isValidImagePath(path)) return null;
+  return path.toLowerCase().endsWith('.svg') ? 'inline-svg' : 'image';
+}
+
 /**
  * 将旧数据小写/蛇形图标名转换为标准预设图标名
  *
@@ -311,4 +317,3 @@ export function resolveIconRef(iconRef: string): ResolvedIcon | null {
   // 5. 无法识别
   return null;
 }
-

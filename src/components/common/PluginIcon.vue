@@ -1,7 +1,8 @@
 <script lang="ts">
 import { defineComponent, computed, ref, watch } from 'vue';
-import { resolveIconRef, type ResolvedIcon } from '@/utils/iconResolver';
-import { isPresetIcon, PRESET_ICON_SET } from '@/constants/presetIcons';
+import { convertFileSrc } from '@tauri-apps/api/core';
+import { resolveIconRef, getPathIconRenderKind, type ResolvedIcon } from '@/utils/iconResolver';
+import { isPresetIcon } from '@/constants/presetIcons';
 import { appDataDir } from '@tauri-apps/api/path';
 
 export default defineComponent({
@@ -77,21 +78,41 @@ export default defineComponent({
     /** 自定义路径图标的 SVG 原始内容（内联渲染，支持 currentColor 继承） */
     const svgContent = ref('');
 
-    async function resolvePathIcon() {
-      if (!props.pluginCode || !props.iconRef) return;
-      const trimmed = props.iconRef.trim();
-      if (!trimmed) return;
+    /** 位图或外部 URL 图标的可加载地址 */
+    const bitmapSrc = ref('');
 
-      const normalized = trimmed.replace(/\\/g, '/').trim().replace(/^\.\//, '').replace(/^\//, '');
-      if (!normalized) return;
-      if (!normalized.toLowerCase().endsWith('.svg')) {
+    async function resolvePathIcon() {
+      const icon = resolved.value;
+      if (!icon) {
+        imageError.value = true;
+        return;
+      }
+
+      if (icon.type === 'url') {
+        bitmapSrc.value = icon.src;
+        imageError.value = false;
+        return;
+      }
+
+      if (!props.pluginCode || !icon.normalizedPath) {
+        imageError.value = true;
+        return;
+      }
+
+      const renderKind = getPathIconRenderKind(icon.normalizedPath);
+      if (!renderKind) {
         imageError.value = true;
         return;
       }
 
       try {
         const appDataPath = await appDataDir();
-        const absolutePath = `${appDataPath}/plugin/${props.pluginCode}/${normalized}`;
+        const absolutePath = `${appDataPath}/plugin/${props.pluginCode}/${icon.normalizedPath}`;
+        if (renderKind === 'image') {
+          bitmapSrc.value = convertFileSrc(absolutePath);
+          imageError.value = false;
+          return;
+        }
         const { readTextFile } = await import('@tauri-apps/plugin-fs');
         const text = await readTextFile(absolutePath);
         svgContent.value = text;
@@ -99,6 +120,7 @@ export default defineComponent({
       } catch (e) {
         console.warn('[PluginIcon] resolve path icon failed:', e);
         svgContent.value = '';
+        bitmapSrc.value = '';
         imageError.value = true;
       }
     }
@@ -108,11 +130,9 @@ export default defineComponent({
       () => {
         imageError.value = false;
         svgContent.value = '';
-        if (props.iconRef && props.pluginCode) {
-          const trimmed = props.iconRef.trim();
-          if (trimmed && !PRESET_ICON_SET.has(trimmed) && !/^https?:\/\//i.test(trimmed)) {
-            resolvePathIcon();
-          }
+        bitmapSrc.value = '';
+        if (props.iconRef && !isPreset.value && resolved.value) {
+          resolvePathIcon();
         }
       },
       { immediate: true }
@@ -125,6 +145,7 @@ export default defineComponent({
       handleImageError,
       isPreset,
       svgContent,
+      bitmapSrc,
       fallbackIcon,
     };
   },
@@ -143,6 +164,17 @@ export default defineComponent({
     class="plugin-icon-inline"
     :style="{ fontSize: size + 'px' }"
     v-html="svgContent"
+  />
+
+  <!-- 位图与显式允许的外部 URL：通过 Tauri asset protocol 加载本地文件 -->
+  <img
+    v-else-if="bitmapSrc && !imageError"
+    class="plugin-icon-image"
+    :src="bitmapSrc"
+    :width="size"
+    :height="size"
+    alt=""
+    @error="handleImageError"
   />
 
   <!-- 降级：加载失败时显示 fallback -->
@@ -167,5 +199,13 @@ export default defineComponent({
 .plugin-icon-inline :deep(svg) {
   width: 100%;
   height: 100%;
+}
+
+.plugin-icon-image {
+  display: inline-block;
+  object-fit: contain;
+  vertical-align: -0.15em;
+  margin-right: 10px;
+  margin-left: 4px;
 }
 </style>

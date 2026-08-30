@@ -660,9 +660,24 @@ export async function provisionPluginResources(
     }
 }
 
-export async function updatePluginMenuHidden(pluginId: number, pluginAlias: string, hidden: number): Promise<Response> {
+/**
+ * Updates the metadata a user can edit in Plugin Center.
+ *
+ * The plugin alias is shown in Plugin Center and settings, while menu_name is
+ * the sidebar/tab label. The edit form has a single display-name input, so the
+ * values must stay synchronized with the menu visibility change.
+ */
+export async function updatePluginMetadata(pluginId: number, pluginAlias: string, hidden: number): Promise<Response> {
+    const now = Date.now();
     return transaction([
-        { sql: 'UPDATE tp_menu SET hidden = ?, updated_at = ?, plugin_alias = ? WHERE plugin_id = ?', params: [hidden, Date.now(), pluginAlias, pluginId] },
+        {
+            sql: 'UPDATE tp_plugin SET plugin_alias = ?, updated_at = ? WHERE id = ?',
+            params: [pluginAlias, now, pluginId],
+        },
+        {
+            sql: 'UPDATE tp_menu SET menu_name = ?, hidden = ?, updated_at = ? WHERE plugin_id = ?',
+            params: [pluginAlias, hidden, now, pluginId],
+        },
     ]);
 }
 

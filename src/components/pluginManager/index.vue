@@ -54,7 +54,7 @@
       </el-form>
       <template #footer>
         <el-button @click="editDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="updatePlugin(currentPlugin); editDialogVisible = false">保存</el-button>
+        <el-button type="primary" @click="updatePlugin(currentPlugin)">保存</el-button>
       </template>
     </el-dialog>
 
@@ -91,7 +91,7 @@
 import {defineComponent} from "vue";
 import ListView from "@/components/pluginManager/ListView.vue";
 import CardView from "@/components/pluginManager/CardView.vue";
-import {deletePluginById, getPlugins, createDebugPlugin, syncDebugPluginManifest, updatePluginMenuHidden, isDebugSwitchEnabled} from "@/sql/service.ts";
+import {deletePluginById, getPlugins, createDebugPlugin, syncDebugPluginManifest, updatePluginMetadata, isDebugSwitchEnabled} from "@/sql/service.ts";
 import {ElMessage} from "element-plus";
 import {Plugin} from '@/class'
 import { open } from '@tauri-apps/plugin-dialog';
@@ -150,11 +150,12 @@ export default defineComponent({
       this.editDialogVisible = true
     },
     async updatePlugin(plugin: Plugin) {
-      const res = await updatePluginMenuHidden(plugin.pluginId, plugin.pluginAlias, Number(plugin.menuHidden) === 1 ? 1 : 0);
+      const res = await updatePluginMetadata(plugin.pluginId, plugin.pluginAlias, Number(plugin.menuHidden) === 1 ? 1 : 0);
       if (res.code !== 1) {
         ElMessage.error('保存失败: ' + res.msg);
         return;
       }
+      this.editDialogVisible = false;
       useMenuStore().fetchMenus();
       await this.handleQuery();
       ElMessage.success('保存成功');
