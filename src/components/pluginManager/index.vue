@@ -4,7 +4,7 @@
         <el-input v-model="searchKeyword" placeholder="请输入插件名称或中文名称" style="width: 194px; margin-right: 20px" />
         <div class="toolbar-actions">
           <el-button type="primary" @click="handleQuery">查询</el-button>
-          <el-dropdown @command="handleImport">
+<el-dropdown @command="handleImport">
             <el-button type="primary">导入插件包</el-button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -12,7 +12,8 @@
                 <el-dropdown-item command="directory">导入目录包</el-dropdown-item>
               </el-dropdown-menu>
             </template>
-          </el-dropdown>
+</el-dropdown>
+<el-button type="primary" @click="$router.push('/pluginMarket')">插件市场</el-button>
           <el-button v-if="selectedPlugins.length > 0" type="danger" @click="batchDeleteDialogVisible = true">
             删除({{ selectedPlugins.length }})
           </el-button>

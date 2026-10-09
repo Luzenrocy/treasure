@@ -10,6 +10,16 @@
     "core:window:allow-set-decorations",
     "core:window:allow-start-dragging",
     "opener:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://github.com/*" },
+        { "url": "https://release-assets.githubusercontent.com/*" },
+        { "url": "https://objects.githubusercontent.com/*" },
+        { "url": "https://huggingface.co/*" },
+        { "url": "https://huggingface.com/*" }
+      ]
+    },
 
     "fs:default",
     "fs:allow-read-file",

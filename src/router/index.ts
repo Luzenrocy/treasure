@@ -2,6 +2,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import pluginManager from "@/components/pluginManager/index.vue"
 import welcome from '@/components/welcome/index.vue'
 import Setting from '@/components/setting/index.vue'
+import PluginMarket from '@/components/pluginMarket/index.vue'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -18,6 +19,11 @@ const routes: RouteRecordRaw[] = [
     path: '/setting',
     name: 'setting',
     component: Setting
+  },
+  {
+    path: '/pluginMarket',
+    name: 'pluginMarket',
+    component: PluginMarket
   },
   {
     // Plugin 路由 - 实际渲染由 frame 组件的 v-show 处理

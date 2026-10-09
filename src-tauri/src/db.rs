@@ -185,7 +185,7 @@ impl Database {
             })
             .unwrap_or(0);
 
-        let migrations: [(&str, &str); 9] = [
+    let migrations: [(&str, &str); 10] = [
             ("1", "Platform Base"),
             ("2", "Add param_key"),
             ("3", "Plugin Init Script Log"),
@@ -194,7 +194,8 @@ impl Database {
             ("6", "Logging defaults off and rename"),
             ("7", "Test plugin data"),
             ("8", "2.0.0 Access grant baseline"),
-            ("9", "Access grant active permission index"),
+        ("9", "Access grant active permission index"),
+        ("10", "Add plugin market API setting"),
         ];
 
         for (version_str, name) in &migrations {
@@ -214,7 +215,8 @@ impl Database {
                           6 => apply_v6(&tx).map_err(|e| e.to_string())?,
                           7 => apply_v7(&tx).map_err(|e| e.to_string())?,
                           8 => apply_v8(&tx).map_err(|e| e.to_string())?,
-                          9 => apply_v9(&tx).map_err(|e| e.to_string())?,
+            9 => apply_v9(&tx).map_err(|e| e.to_string())?,
+            10 => apply_v10(&tx).map_err(|e| e.to_string())?,
                           _ => {}
                     }
                     tx.execute(
@@ -436,7 +438,8 @@ fn apply_v1(tx: &rusqlite::Transaction, now: i64) -> RusResult<()> {
     tx.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tp_plugin_uid ON tp_plugin(plugin_uid) WHERE plugin_uid IS NOT NULL", [])?;
     tx.execute("INSERT OR IGNORE INTO tp_plugin (plugin_code, plugin_alias, plugin_version, plugin_type, plugin_uid, created_at, updated_at) VALUES ('treasure', '系统参数', '1.0.0', 0, '00000000-0000-5000-8000-000000000000', ?, ?)", [now, now])?;
     tx.execute("INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_options, plugin_id, menu_id, created_at, updated_at) VALUES ('treasure::plugin_manager_switch', '插件中心', 'switch', '1', '{\"activeText\":\"显示\",\"inActiveText\":\"隐藏\",\"activeValue\":\"1\",\"inactiveValue\":\"0\"}', (SELECT id FROM tp_plugin WHERE plugin_code = 'treasure'), '100002', ?, ?)", [now, now])?;
-    tx.execute("INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_options, plugin_id, created_at, updated_at) VALUES ('treasure::debug_switch', '插件调试入口', 'switch', '0', '{\"activeText\":\"开\",\"inActiveText\":\"关\",\"activeValue\":\"1\",\"inactiveValue\":\"0\"}', (SELECT id FROM tp_plugin WHERE plugin_code = 'treasure'), ?, ?)", [now, now])?;
+tx.execute("INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_options, plugin_id, created_at, updated_at) VALUES ('treasure::debug_switch', '插件调试入口', 'switch', '0', '{\"activeText\":\"开\",\"inActiveText\":\"关\",\"activeValue\":\"1\",\"inactiveValue\":\"0\"}', (SELECT id FROM tp_plugin WHERE plugin_code = 'treasure'), ?, ?)", [now, now])?;
+        tx.execute("INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_placeholder, param_options, plugin_id, created_at, updated_at) VALUES ('treasure::plugin_market_api_base_url', '插件市场接口', 'input', 'https://luzenrocy-plugin-market.ms.show/api/', '请输入插件市场的baseUrl', '{}', (SELECT id FROM tp_plugin WHERE plugin_code = 'treasure'), ?, ?)", [now, now])?;
     let plugin_count: i64 = match tx.query_row("SELECT COUNT(*) as count FROM tp_plugin WHERE plugin_code = 'treasure'", [], |row| row.get(0)).optional() {
         Ok(Some(n)) => n,
         Ok(None) | Err(rusqlite::Error::QueryReturnedNoRows) => 0,
@@ -599,6 +602,25 @@ fn apply_v9(tx: &rusqlite::Transaction) -> RusResult<()> {
     Ok(())
 }
 
+/** 插件市场接口参数：新库 INSERT 种子；已存在库 UPDATE 显示名/占位符，默认值仅在用户未配置（空值）时填充。 */
+fn apply_v10(tx: &rusqlite::Transaction) -> RusResult<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO tp_setting (param_code, param_name, param_type, param_value, param_placeholder, param_properties, param_options, param_key, plugin_id, menu_id, created_at, updated_at)
+         SELECT 'treasure::plugin_market_api_base_url', '插件市场接口', 'input', 'https://luzenrocy-plugin-market.ms.show/api/', '请输入插件市场的baseUrl', NULL, NULL, 'plugin_market_api_base_url', id, NULL, strftime('%s','now') * 1000, strftime('%s','now') * 1000
+         FROM tp_plugin WHERE plugin_code = 'treasure'",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE tp_setting SET param_name = '插件市场接口', param_placeholder = '请输入插件市场的baseUrl' WHERE param_code = 'treasure::plugin_market_api_base_url'",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE tp_setting SET param_value = 'https://luzenrocy-plugin-market.ms.show/api/' WHERE param_code = 'treasure::plugin_market_api_base_url' AND (param_value IS NULL OR param_value = '')",
+        [],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod migration_tests {
     use super::*;
@@ -625,7 +647,7 @@ mod migration_tests {
             .expect("read applied migration history");
         assert_eq!(
             versions.iter().map(|row| row["version"].as_i64()).collect::<Vec<_>>(),
-            vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8), Some(9)],
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8), Some(9), Some(10)],
         );
     }
 }

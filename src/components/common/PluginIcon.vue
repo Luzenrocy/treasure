@@ -188,8 +188,11 @@ export default defineComponent({
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 1em;
   height: 1em;
+  min-width: 1em;
+  min-height: 1em;
   vertical-align: -0.15em;
   margin-right: 10px;
   margin-left: 4px;

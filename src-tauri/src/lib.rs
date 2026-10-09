@@ -493,6 +493,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_http::init())
         .setup(|app| {
             // 启动时申请 macOS 通知权限
             let app_handle = app.handle().clone();
