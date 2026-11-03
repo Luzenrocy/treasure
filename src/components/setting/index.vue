@@ -5,6 +5,7 @@
         <el-card
           v-for="(group, index) in groupedSettings"
           :key="index"
+          :ref="(element: unknown) => setGroupCardRef(group.pluginId, element)"
           class="setting-group"
         >
           <div class="group-title">
@@ -142,6 +143,9 @@ export default defineComponent({
       settings: [] as any[],
       menuStore: useMenuStore(),
       saving: false,
+      groupCards: {} as Record<string, HTMLElement>,
+      groupCardHeights: {} as Record<string, number>,
+      groupCardObserver: null as ResizeObserver | null,
     };
   },
   computed: {
@@ -165,6 +169,12 @@ export default defineComponent({
     await logEvent('info', 'sys', 'open_setting', { action: 'open' });
     await this.loadSettings();
   },
+  mounted() {
+    this.observeGroupCards();
+  },
+  beforeUnmount() {
+    this.groupCardObserver?.disconnect();
+  },
   methods: {
     /** 安全解析 JSON，失败时记录错误日志并返回空对象/空数组 */
     safeJsonParse(json: string | null | undefined, fallback: any = {}): any {
@@ -184,13 +194,32 @@ export default defineComponent({
     getPluginNameChars(pluginName: string | null | undefined): string[] {
       return Array.from(pluginName || '');
     },
-    getSpacerStyle(group: { pluginName?: string; settings: any[] }): Record<string, string> {
+    setGroupCardRef(pluginId: string, element: unknown) {
+      const root = element instanceof HTMLElement ? element : (element as { $el?: unknown } | null)?.$el;
+      if (root instanceof HTMLElement) this.groupCards[pluginId] = root;
+    },
+    observeGroupCards() {
+      this.groupCardObserver?.disconnect();
+      if (typeof ResizeObserver === 'undefined') return;
+      this.groupCardObserver = new ResizeObserver((entries) => {
+        entries.forEach((entry) => {
+          const pluginId = Object.entries(this.groupCards).find(([, card]) => card === entry.target)?.[0];
+          if (pluginId) this.groupCardHeights[pluginId] = entry.contentRect.height;
+        });
+      });
+      Object.values(this.groupCards).forEach((card) => this.groupCardObserver?.observe(card));
+    },
+    getSpacerStyle(group: { pluginId: string; pluginName?: string; settings: any[] }): Record<string, string> {
       const characterCount = this.getPluginNameChars(group.pluginName).length;
-      const settingHeight = group.settings.length * 62 + 20;
-      const characterHeight = characterCount * 26;
-      const spacerHeight = Math.max(0, settingHeight - characterHeight) / (characterCount + 1);
-
-      return { height: `${spacerHeight}px` };
+      if (!characterCount) return { height: '0px' };
+      // A title may extend by at most half of the card's combined vertical padding.
+      // Negative space is intentionally represented as a negative margin: CSS ignores
+      // negative heights, while a negative margin lets neighbouring glyphs overlap.
+      const estimatedCardHeight = group.settings.length * 62 + 20;
+      const cardHeight = this.groupCardHeights[group.pluginId] ?? estimatedCardHeight;
+      const maximumTitleHeight = cardHeight + 16;
+      const spacerHeight = (maximumTitleHeight - characterCount * 26) / (characterCount + 1);
+      return spacerHeight >= 0 ? { height: `${spacerHeight}px` } : { height: '0px', marginTop: `${spacerHeight}px` };
     },
     /** 根据 start/end/step 生成时间选项列表 */
     generateTimeOptions(props: Record<string, any>): Array<{ label: string; value: string }> {
@@ -260,6 +289,8 @@ export default defineComponent({
           }
           return item;
         });
+        await this.$nextTick();
+        this.observeGroupCards();
       } else {
         ElMessage.error('设置加载失败！原因：' + (res.msg || '未知错误'));
       }

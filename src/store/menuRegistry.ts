@@ -43,6 +43,8 @@ export const useMenuRegistry = defineStore('menuRegistry', {
   state: () => ({
     registrations: new Map<string, MenuRegistration[]>(),
     handleCache: new Map<string, HandleCache>(),
+    subscriptions: new Map<string, Set<string>>(),
+    capabilityVersion: 1,
     menuVersion: 0,  // 每次 register/unregister 递增，frame watch 此值触发 rebuildMenu
   }),
 
@@ -65,6 +67,7 @@ export const useMenuRegistry = defineStore('menuRegistry', {
       if (filtered.length === 0) this.registrations.delete(pluginCode);
       else this.registrations.set(pluginCode, filtered);
       this.handleCache.delete(`${pluginCode}:${menuId}`);
+      this.subscriptions.delete(`${pluginCode}:${menuId}`);
       this.menuVersion++;
     },
 
@@ -74,6 +77,7 @@ export const useMenuRegistry = defineStore('menuRegistry', {
       for (const [key, cache] of this.handleCache) {
         if (cache.pluginCode === pluginCode) this.handleCache.delete(key);
       }
+      for (const key of this.subscriptions.keys()) if (key.startsWith(`${pluginCode}:`)) this.subscriptions.delete(key);
       this.menuVersion++;
     },
 
@@ -99,7 +103,25 @@ export const useMenuRegistry = defineStore('menuRegistry', {
     clearAll() {
       this.registrations.clear();
       this.handleCache.clear();
+      this.subscriptions.clear();
       this.menuVersion++;
+    },
+    update(pluginCode: string, reg: MenuRegistration) {
+      this.register(pluginCode, reg);
+    },
+    subscribe(pluginCode: string, menuId: string, token: string) {
+      const key = `${pluginCode}:${menuId}`;
+      const tokens = this.subscriptions.get(key) || new Set<string>();
+      tokens.add(token);
+      this.subscriptions.set(key, tokens);
+    },
+    unsubscribe(_pluginCode: string, token: string) {
+      for (const [key, tokens] of this.subscriptions) {
+        if (tokens.delete(token) && tokens.size === 0) this.subscriptions.delete(key);
+      }
+    },
+    isSubscribed(pluginCode: string, menuId: string) {
+      return (this.subscriptions.get(`${pluginCode}:${menuId}`)?.size ?? 0) > 0;
     },
     clearHandles() {
       this.handleCache.clear();

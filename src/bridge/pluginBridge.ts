@@ -35,7 +35,8 @@ let executor: PluginSqlExecutor;
 const fileGrants = new FileGrantService();
 
 type Capability = 'files' | 'directories' | 'storage' | 'database' | 'settings' | 'permissions' | 'menus' | 'notifications' | 'logs';
-interface CapabilityRegistration { capability: Capability; action: string; minPlatformVersion: '2.0.0'; validate: (payload: any) => boolean; }
+interface CapabilityRegistration { capability: Capability; action: string; minPlatformVersion: '2.0.0'; capabilityVersion?: number; minCapabilityVersion?: number; validate: (payload: any) => boolean; }
+export const MENU_CAPABILITY_VERSION = 1;
 
 /** `instanceof` is not reliable for structured-cloned data from plugin iframes. */
 function isUint8Array(value: unknown): value is Uint8Array {
@@ -78,7 +79,10 @@ export const capabilityRegistry: Record<string, CapabilityRegistration> = {
     'permissions.grantDirectory': { capability: 'permissions', action: 'grantDirectory', minPlatformVersion: '2.0.0', validate: p => isPermissionKey(p?.permissionKey) && typeof p?.directory?.id === 'string' },
     'permissions.verifyDirectoryGrant': { capability: 'permissions', action: 'verifyDirectoryGrant', minPlatformVersion: '2.0.0', validate: p => isPermissionKey(p?.permissionKey) && typeof p?.accessGrantId === 'string' && typeof p?.pathHash === 'string' },
     'permissions.revokeDirectory': { capability: 'permissions', action: 'revokeDirectory', minPlatformVersion: '2.0.0', validate: p => isPermissionKey(p?.permissionKey) },
-    'menus.register': { capability: 'menus', action: 'registerMenu', minPlatformVersion: '2.0.0', validate: p => typeof p?.menuId === 'string' && Array.isArray(p?.items) },
+    'menus.register': { capability: 'menus', action: 'registerMenu', minPlatformVersion: '2.0.0', capabilityVersion: MENU_CAPABILITY_VERSION, minCapabilityVersion: MENU_CAPABILITY_VERSION, validate: p => typeof p?.menuId === 'string' && Array.isArray(p?.items) },
+    'menus.update': { capability: 'menus', action: 'updateMenu', minPlatformVersion: '2.0.0', capabilityVersion: MENU_CAPABILITY_VERSION, minCapabilityVersion: MENU_CAPABILITY_VERSION, validate: p => typeof p?.menuId === 'string' && Array.isArray(p?.items) },
+    'menus.subscribe': { capability: 'menus', action: 'subscribeMenu', minPlatformVersion: '2.0.0', capabilityVersion: MENU_CAPABILITY_VERSION, minCapabilityVersion: MENU_CAPABILITY_VERSION, validate: p => typeof p?.menuId === 'string' && typeof p?.token === 'string' },
+    'menus.unsubscribe': { capability: 'menus', action: 'unsubscribeMenu', minPlatformVersion: '2.0.0', capabilityVersion: MENU_CAPABILITY_VERSION, minCapabilityVersion: MENU_CAPABILITY_VERSION, validate: p => typeof p?.token === 'string' },
     'menus.unregister': { capability: 'menus', action: 'unregisterMenu', minPlatformVersion: '2.0.0', validate: p => typeof p?.id === 'string' },
     'notifications.send': { capability: 'notifications', action: 'sendNotification', minPlatformVersion: '2.0.0', validate: p => typeof p?.title === 'string' && typeof p?.body === 'string' },
     'logs.write': { capability: 'logs', action: 'log', minPlatformVersion: '2.0.0', validate: p => typeof p?.message === 'string' },
@@ -197,6 +201,9 @@ export function initPluginBridge() {
         if (action === 'writeGrantedFile') { data.directoryId = payload.directory?.id; data.fileId = payload.file?.id; data.fileName = payload.fileName; data.bytes = Array.from(payload.data || []); }
         if (action === 'writeStorageFile') { data.key = payload.key; data.bytes = Array.from(payload.data || []); }
         if (action === 'registerMenu') data.reg = payload;
+        if (action === 'updateMenu') data.reg = payload;
+        if (action === 'subscribeMenu') { data.menuId = payload.menuId; data.token = payload.token; }
+        if (action === 'unsubscribeMenu') data.token = payload.token;
         if (action === 'unregisterMenu') data.menuId = payload.id;
         if (action === 'getSettingByKey') data.paramKey = payload.key;
         if (action === 'saveSettingByKey') { data.paramKey = payload.key; data.paramValue = payload.value; data.directory = payload.directory; }
@@ -447,6 +454,24 @@ export function initPluginBridge() {
                     break;
                 }
 
+                case 'updateMenu': {
+                    useMenuRegistry().update(pluginCode, data.reg);
+                    result = { code: 1 };
+                    break;
+                }
+
+                case 'subscribeMenu': {
+                    useMenuRegistry().subscribe(pluginCode, data.menuId, data.token);
+                    result = { code: 1, data: { capabilityVersion: MENU_CAPABILITY_VERSION } };
+                    break;
+                }
+
+                case 'unsubscribeMenu': {
+                    useMenuRegistry().unsubscribe(pluginCode, data.token);
+                    result = { code: 1 };
+                    break;
+                }
+
                 // ── 插件菜单注销 ───────────────────────────────
                 // 插件 beforeUnmount 时调用，清理菜单注册
                 case 'unregisterMenu': {
@@ -607,7 +632,11 @@ async function resolveGrantedOutputPath(pluginCode: string, directoryId: unknown
 export function dispatchMenuEvent(pluginCode: string, menuId: string, itemId: string) {
     // 仅发送给当前活跃标签页的插件，避免事件误投到后台插件
     if (useTabsStore().activePluginCode !== pluginCode) return;
+    if (!useMenuRegistry().isSubscribed(pluginCode, menuId)) return;
     const iframe = document.querySelector<HTMLIFrameElement>(`iframe[data-treasure-plugin="${pluginCode}"]`);
     if (!iframe?.contentWindow) return;
-    iframe.contentWindow.postMessage({ type: 'treasure-menu-event', menuId, itemId }, '*');
+    const src = iframe.getAttribute('src') || iframe.src || '';
+    let targetOrigin = '*';
+    try { targetOrigin = new URL(src).origin; } catch { if (src.startsWith('plugin://localhost/')) targetOrigin = 'plugin://localhost'; }
+    iframe.contentWindow.postMessage({ type: 'treasure-menu-event', menuId, itemId, pluginCode }, targetOrigin);
 }
