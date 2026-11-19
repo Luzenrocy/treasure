@@ -1,0 +1,23 @@
+role: writer
+round: 1
+iteration: 3
+read_at: "2026-11-14"
+shared_inputs:
+  - "docs/council/user-brief.md"
+  - "docs/council/requirements-ledger.yaml"
+  - "docs/council/adaptive-contract.yaml"
+  - "docs/council/source-index.md"
+  - "docs/council/rules-snapshot.yaml"
+  - "docs/council/memory.md"
+  - "docs/council/manifest.yaml"
+prior_iteration:
+  draft: "docs/council/rounds/round-01/iterations/iteration-02/draft.md"
+  review: "docs/council/rounds/round-01/iterations/iteration-02/review.md"
+  revision: "docs/council/rounds/round-01/iterations/iteration-02/revision.md"
+new_evidence: "S-010 test-source inventory"
+resolved_findings: ["R-002"]
+constraints:
+  - "S-006 仅用于活动源码/API 扫描，不用于测试清单。"
+  - "仅 google-authenticator 的 no-test command result 可被陈述。"
+  - "不得对 shi-yu-lu、treasure-plugin、kao-cheng-ce 推断未观察的 npm test 结果。"
+  - "不得修改业务实现或最终发布路径。"

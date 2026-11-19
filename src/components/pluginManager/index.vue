@@ -1,6 +1,6 @@
 <template>
     <div class="plugin-manager-page">
-      <el-header height="40px" class="search-header">
+      <el-header v-show="!marketVisible" height="40px" class="search-header">
         <el-input v-model="searchKeyword" placeholder="请输入插件名称或中文名称" style="width: 194px; margin-right: 20px" />
         <div class="toolbar-actions">
           <el-button type="primary" @click="handleQuery">查询</el-button>
@@ -13,7 +13,7 @@
               </el-dropdown-menu>
             </template>
 </el-dropdown>
-<el-button type="primary" @click="$router.push('/pluginMarket')">插件市场</el-button>
+<el-button type="primary" @click="marketVisible = true">插件市场</el-button>
           <el-button v-if="selectedPlugins.length > 0" type="danger" @click="batchDeleteDialogVisible = true">
             删除({{ selectedPlugins.length }})
           </el-button>
@@ -25,11 +25,19 @@
         </el-button-group>
       </el-header>
 
-      <el-main class="plugin-manager-container">
+      <el-main v-show="!marketVisible" class="plugin-manager-container">
         <component :is="currentView"  :plugins="plugins" :selectedPlugins="selectedPlugins"
                   @showDeleteDialog="showDeleteDialog" @editPlugin="editPlugin" @openPlugin="openPlugin"
                   @syncManifest="syncManifest" @toggle-selection="toggleSelection" />
       </el-main>
+
+      <!-- 插件市场：插件中心的子页面（非独立标签页），通过返回按钮回到插件中心 -->
+      <PluginMarket
+        v-show="marketVisible"
+        ref="marketView"
+        class="market-view"
+        @back="marketVisible = false"
+      />
     </div>
 
     <el-dialog v-model="editDialogVisible" title="编辑插件">
@@ -92,6 +100,7 @@
 import {defineComponent} from "vue";
 import ListView from "@/components/pluginManager/ListView.vue";
 import CardView from "@/components/pluginManager/CardView.vue";
+import PluginMarket from "@/components/pluginMarket/index.vue";
 import {deletePluginById, getPlugins, createDebugPlugin, syncDebugPluginManifest, updatePluginMetadata, isDebugSwitchEnabled} from "@/sql/service.ts";
 import {ElMessage} from "element-plus";
 import {Plugin} from '@/class'
@@ -101,6 +110,7 @@ import { appDataDir } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { validateManifest, isPluginCodeExists, getPluginByUid, getPluginByCode, upgradePlugin, upgradePluginSettings, runPluginInitScripts, provisionPluginResources } from '@/sql/platformService';
 import { validateDebugUrl } from '@/utils/debugValidator';
+import { assertMinimumPlatformVersion, PlatformVersionError } from '@/utils/platformVersion';
 import { useMenuStore } from '@/store/menu';
 import { useTabsStore } from '@/store/tabs';
 import { logEvent } from '@/utils/logger';
@@ -109,12 +119,14 @@ import { removeSelectedPluginId, retainExistingPluginIds, toggleSelectedPluginId
 
 export default defineComponent({
   name: "pluginManager",
-  components: {},
+  components: { PluginMarket },
   data(){
     return {
       plugins: [] as any[],
       selectedPlugins: [] as number[],
       viewType: 'list' as 'list' | 'card',
+      // 插件市场是否作为插件中心的子页面打开
+      marketVisible: false,
       currentPlugin:  {} as Plugin,
       searchKeyword : '',
       editDialogVisible : false,
@@ -130,7 +142,26 @@ export default defineComponent({
   },
   mounted() {
     this.loadDebugSwitch()
+  },
+  // keep-alive 缓存下首次挂载与每次重新激活都会触发：从插件市场返回时刷新插件列表
+  activated() {
     this.handleQuery()
+    // 从其他标签页切回时，若市场页仍打开则保持停留（marketVisible 随 keep-alive 保留）并刷新市场数据
+    if (this.marketVisible) {
+      this.$nextTick(() => {
+        (this.$refs.marketView as any)?.refresh?.();
+      })
+    }
+  },
+  watch: {
+    // 点击"插件市场"按钮进入子页面时刷新数据（组件常驻 DOM，v-show 切换不触发子组件生命周期）
+    marketVisible(value: boolean) {
+      if (value) {
+        this.$nextTick(() => {
+          (this.$refs.marketView as any)?.refresh?.();
+        })
+      }
+    }
   },
   computed:{
     currentView(){
@@ -378,6 +409,13 @@ export default defineComponent({
           if (tmpExtractDir) await invoke('delete_directory', { path: tmpExtractDir });
           return;
         }
+        try {
+          await assertMinimumPlatformVersion(manifest.minPlatformVersion);
+        } catch (error) {
+          ElMessage.error(error instanceof PlatformVersionError ? error.message : '无法读取当前 Treasure 版本');
+          if (tmpExtractDir) await invoke('delete_directory', { path: tmpExtractDir });
+          return;
+        }
 
         const manifestUid = manifest.plugin_uid;
 
@@ -612,6 +650,12 @@ export default defineComponent({
   padding: 0 !important;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* 插件市场子页面：占满插件中心剩余空间 */
+.market-view {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 .plugin-manager-container::-webkit-scrollbar { width: 6px; }
 .plugin-manager-container::-webkit-scrollbar-track { background: transparent; }

@@ -1,0 +1,21 @@
+role: writer
+round: 1
+iteration: 2
+read_at: "2026-11-14"
+shared_inputs:
+  - "docs/council/user-brief.md"
+  - "docs/council/requirements-ledger.yaml"
+  - "docs/council/adaptive-contract.yaml"
+  - "docs/council/source-index.md"
+  - "docs/council/rules-snapshot.yaml"
+  - "docs/council/memory.md"
+  - "docs/council/manifest.yaml"
+prior_iteration:
+  draft: "docs/council/rounds/round-01/iterations/iteration-01/draft.md"
+  coverage: "docs/council/rounds/round-01/iterations/iteration-01/coverage.yaml"
+  review: "docs/council/rounds/round-01/iterations/iteration-01/review.md"
+resolved_findings: ["R-001"]
+constraints:
+  - "测试结果以完成的升级执行和 I1 review 为准；沙箱启动观察不替代最终结果。"
+  - "不得把未执行 Tauri iframe E2E 表述为通过。"
+  - "不得修改业务实现或最终发布路径。"

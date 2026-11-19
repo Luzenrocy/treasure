@@ -43,8 +43,10 @@ export const useMenuRegistry = defineStore('menuRegistry', {
   state: () => ({
     registrations: new Map<string, MenuRegistration[]>(),
     handleCache: new Map<string, HandleCache>(),
-    subscriptions: new Map<string, Set<string>>(),
-    capabilityVersion: 1,
+    // pluginCode -> menuId -> subscription tokens. Keep plugin boundaries explicit
+    // so two iframe instances may safely issue the same local token value.
+    subscriptions: new Map<string, Map<string, Set<string>>>(),
+    capabilityVersion: 2,
     menuVersion: 0,  // 每次 register/unregister 递增，frame watch 此值触发 rebuildMenu
   }),
 
@@ -67,7 +69,9 @@ export const useMenuRegistry = defineStore('menuRegistry', {
       if (filtered.length === 0) this.registrations.delete(pluginCode);
       else this.registrations.set(pluginCode, filtered);
       this.handleCache.delete(`${pluginCode}:${menuId}`);
-      this.subscriptions.delete(`${pluginCode}:${menuId}`);
+      const pluginSubscriptions = this.subscriptions.get(pluginCode);
+      pluginSubscriptions?.delete(menuId);
+      if (pluginSubscriptions?.size === 0) this.subscriptions.delete(pluginCode);
       this.menuVersion++;
     },
 
@@ -77,7 +81,7 @@ export const useMenuRegistry = defineStore('menuRegistry', {
       for (const [key, cache] of this.handleCache) {
         if (cache.pluginCode === pluginCode) this.handleCache.delete(key);
       }
-      for (const key of this.subscriptions.keys()) if (key.startsWith(`${pluginCode}:`)) this.subscriptions.delete(key);
+      this.subscriptions.delete(pluginCode);
       this.menuVersion++;
     },
 
@@ -106,22 +110,25 @@ export const useMenuRegistry = defineStore('menuRegistry', {
       this.subscriptions.clear();
       this.menuVersion++;
     },
-    update(pluginCode: string, reg: MenuRegistration) {
-      this.register(pluginCode, reg);
-    },
     subscribe(pluginCode: string, menuId: string, token: string) {
-      const key = `${pluginCode}:${menuId}`;
-      const tokens = this.subscriptions.get(key) || new Set<string>();
+      const pluginSubscriptions = this.subscriptions.get(pluginCode) || new Map<string, Set<string>>();
+      const tokens = pluginSubscriptions.get(menuId) || new Set<string>();
       tokens.add(token);
-      this.subscriptions.set(key, tokens);
+      pluginSubscriptions.set(menuId, tokens);
+      this.subscriptions.set(pluginCode, pluginSubscriptions);
     },
-    unsubscribe(_pluginCode: string, token: string) {
-      for (const [key, tokens] of this.subscriptions) {
-        if (tokens.delete(token) && tokens.size === 0) this.subscriptions.delete(key);
+    unsubscribe(pluginCode: string, token: string) {
+      const pluginSubscriptions = this.subscriptions.get(pluginCode);
+      if (!pluginSubscriptions) return;
+      for (const [menuId, tokens] of pluginSubscriptions) {
+        if (!tokens.delete(token)) continue;
+        if (tokens.size === 0) pluginSubscriptions.delete(menuId);
+        if (pluginSubscriptions.size === 0) this.subscriptions.delete(pluginCode);
+        return;
       }
     },
     isSubscribed(pluginCode: string, menuId: string) {
-      return (this.subscriptions.get(`${pluginCode}:${menuId}`)?.size ?? 0) > 0;
+      return (this.subscriptions.get(pluginCode)?.get(menuId)?.size ?? 0) > 0;
     },
     clearHandles() {
       this.handleCache.clear();

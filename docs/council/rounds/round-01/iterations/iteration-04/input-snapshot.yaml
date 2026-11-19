@@ -1,0 +1,16 @@
+role: writer
+round: 1
+iteration: 4
+read_at: "2026-11-14"
+shared_inputs: ["user-brief.md", "requirements-ledger.yaml", "adaptive-contract.yaml", "source-index.md", "rules-snapshot.yaml", "memory.md", "manifest.yaml"]
+prior_iteration:
+  draft: "docs/council/rounds/round-01/iterations/iteration-03/draft.md"
+  review: "docs/council/rounds/round-01/iterations/iteration-03/review.md"
+  revision: "docs/council/rounds/round-01/iterations/iteration-03/revision.md"
+resolved_findings: ["R-003"]
+metadata_sources:
+  document_type: "adaptive-contract.yaml / manifest.yaml"
+  version_status_dates_path_format: "manifest.yaml"
+  audience: "adaptive-contract.yaml"
+  owner_author: "manifest.yaml owner=pending; rendered as 未指定"
+constraints: ["Preserve evidence conclusions", "Do not modify business source or publication path"]

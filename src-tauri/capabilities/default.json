@@ -17,7 +17,8 @@
         { "url": "https://release-assets.githubusercontent.com/*" },
         { "url": "https://objects.githubusercontent.com/*" },
         { "url": "https://huggingface.co/*" },
-        { "url": "https://huggingface.com/*" }
+        { "url": "https://huggingface.com/*" },
+        { "url": "https://luzenrocy-plugin-market.ms.show/*" }
       ]
     },
 

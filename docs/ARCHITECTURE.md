@@ -23,7 +23,7 @@ flowchart LR
 | 仓库 | 权威内容 | 变更时必须联动 |
 | --- | --- | --- |
 | `treasure` | 宿主行为、安全策略、持久化与安装流程 | SDK operation、返回结构、插件模板和协议文档。 |
-| `treasure-sdk` | 插件可使用的公开 TypeScript API | 宿主能力注册表、内置插件、迁移文档。 |
+| `treasure-sdk` | 插件可使用的公开 TypeScript API 与桥接消息信封契约 | 宿主能力注册表、内置插件、迁移文档。 |
 | `treasure-plugins` | manifest、迁移脚本和业务实现示例 | SDK 最低版本、宿主联调与发布检查。 |
 
 ## 2. 启动与运行时链路
@@ -39,24 +39,27 @@ flowchart LR
 
 ## 3. 插件能力网关
 
-`src/bridge/pluginBridge.ts` 的 `capabilityRegistry` 是宿主支持 operation 的单一清单。当前能力域包括 `files`、`directories`、`storage`、`database`、`settings`、`permissions`、`menus`、`notifications` 和 `logs`。
+`src/bridge/pluginBridge.ts` 的 `capabilityRegistry` 是宿主支持 operation 的单一清单。当前能力域包括 `files`、`directories`、`storage`、`database`、`settings`、`permissions`、`menus`、`notifications` 和 `logs`。`1.0.0` 基线的桥接消息信封按能力域拆分：插件请求按能力域使用 `treasure-{domain}-request`（如 `treasure-menu-request`、`treasure-file-request`），宿主按请求 type 分发到对应能力域，再按 operation 分发到具体 action，并以 `treasure-{domain}-response` 回传。已停用 SDK 的 `treasure-db-request` 统一信封仅保留为迁移兼容路径。
 
 一条请求的裁决顺序：
 
 ```text
-消息信封与 requestId
+按能力域区分的消息信封与 requestId
   → MessageEvent.source 对应已注册 iframe
   → 调试 origin / 安装协议来源校验
+  → 请求 type 与 operation 能力域一致性校验
   → operation 存在且 payload 通过结构校验
   → 文件引用、目录引用、permissionKey 或 SQL 表声明校验
   → 资源上限校验
   → 原生能力或 Rust SQL 执行
-  → Result<T> 回传到请求 origin
+  → 按请求类型对应的 Result<T> 回传到请求 origin
 ```
 
 重要上限来自当前宿主源码：数据库请求载荷 256 KiB、事务最多 50 条、查询结果最多 1,000 行、单次文件或私有存储读写最多 32 MiB。修改这些值属于协议行为变更，必须同步 SDK API 参考和插件测试。
 
-当前菜单能力存在一个需要保留在架构评审中的契约缺口：SDK 公开了 `menus.register/unregister`，但尚未公开类型化的菜单点击订阅或勾选状态更新 API；宿主目前以 `treasure-menu-event` 反向消息通知 iframe。已有内置插件仍直接监听该内部消息。新增第三方插件不应把该消息当稳定公共 API；完善菜单能力时应先在 SDK 定义事件订阅和生命周期语义，再迁移内置插件。
+菜单能力已通过 SDK 类型化接口提供：`menus.register/updateChecked/subscribe/unsubscribe/unregister`。相同 `menuId` 的 `register` 会覆盖更新并重建窗口菜单；动态勾选同步优先走 `menus.updateChecked` 轻量路径——宿主通过缓存句柄直接 `setChecked`，不触发整窗菜单重建。注册请求会校验 `rootLabel` 为宿主已知系统菜单名（View/File/Edit/Window/Help 及本地化别名）且 items 条目结构合法。宿主以 `treasure-menu-event` 反向消息通知活动 iframe，SDK 在本地维护 listener registry 并按订阅分发；插件必须经由 `menus.subscribe` 接收点击，不得自行监听 `window` 消息。订阅按插件身份隔离，即使不同插件生成相同 token，注销也不会相互影响。切换标签页时宿主仅向活动插件投递菜单事件，插件卸载、标签关闭或重载时清理注册与订阅。
+
+窗口菜单的构建逻辑已从 `frame/index.vue` 解耦到 `pluginBridge` 的菜单构建服务（`mountPluginMenus` 与 `findSubmenuRecursive`/`moveItemToEnd`/`removeMenuItem`）：插件菜单按 `rootLabel` 与本地化别名定位系统菜单父级、处理 `submenuLabel`、生成 Tauri 菜单项并写入句柄缓存。`frame/index.vue` 仅负责调用该服务与 `Menu.setAsAppMenu/setAsWindowMenu`，其余为宿主默认菜单（关闭标签、关闭窗口替换、全屏移位）。这样便于单元测试（见 `pluginBridge.test.ts`）与后续多平台（非 Tauri）适配。
 
 ## 4. 数据与权限模型
 

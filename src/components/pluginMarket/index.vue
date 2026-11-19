@@ -15,6 +15,10 @@
           @keyup.enter="loadPlugins"
         />
         <el-button type="primary" :loading="loading" @click="loadPlugins">查询</el-button>
+        <el-button class="market-back" text @click="$emit('back')">
+          <el-icon :size="14"><ArrowLeft /></el-icon>
+          <span>返回</span>
+        </el-button>
       </div>
     </header>
 
@@ -182,7 +186,7 @@
 <script lang="ts">
 import { defineComponent } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Search, ArrowRight, Close } from '@element-plus/icons-vue';
+import { Search, ArrowRight, ArrowLeft, Close } from '@element-plus/icons-vue';
 import { getSettings, getPlugins } from '@/sql/service';
 import {
   fetchMarketPlugins,
@@ -194,12 +198,13 @@ import {
 } from '@/services/pluginMarketClient';
 import {
   installPluginFromMarket,
-  DEFAULT_ALLOWED_DOWNLOAD_HOSTS,
 } from '@/services/pluginMarketInstaller';
+import { getCurrentPlatformVersion, isMinimumPlatformVersionSatisfied, platformVersionRequirementMessage } from '@/utils/platformVersion';
 
 export default defineComponent({
   name: 'PluginMarket',
-  components: { ArrowRight, Close },
+  emits: ['back'],
+  components: { ArrowRight, ArrowLeft, Close },
   data() {
     return {
       Search,
@@ -256,14 +261,22 @@ export default defineComponent({
       return currentVersion === release.version ? '已安装' : '更新';
     },
   },
-  async activated() {
-    await this.loadMarketConfig();
-    await this.loadInstalledVersions();
-    if (this.marketApiBaseUrl) {
-      await this.loadPlugins();
-    }
+  // 市场页作为插件中心的子页面被 keep-alive 缓存：重新激活时自动刷新数据
+  activated() {
+    this.refresh();
   },
   methods: {
+    /**
+     * 刷新市场全部数据（配置、已安装版本、插件列表）。
+     * 幂等：由宿主组件（插件中心）在进入市场页时调用，keep-alive 重新激活时也会自调用。
+     */
+    async refresh() {
+      await this.loadMarketConfig();
+      await this.loadInstalledVersions();
+      if (this.marketApiBaseUrl) {
+        await this.loadPlugins();
+      }
+    },
     async loadMarketConfig() {
       const res = await getSettings();
       if (res.code !== 1) {
@@ -363,6 +376,21 @@ export default defineComponent({
         return;
       }
       const plugin = this.selectedPlugin;
+      let platformVersion: string;
+      try {
+        platformVersion = await getCurrentPlatformVersion();
+      } catch {
+        ElMessage.error('无法读取当前 Treasure 版本，暂时无法安装插件。');
+        return;
+      }
+      if (release.minPlatformVersion && !isMinimumPlatformVersionSatisfied(release.minPlatformVersion, platformVersion)) {
+        await ElMessageBox.alert(
+          platformVersionRequirementMessage(release.minPlatformVersion, platformVersion),
+          '需要更新 Treasure',
+          { confirmButtonText: '我知道了', type: 'warning' },
+        );
+        return;
+      }
       // confirm dialog lists source/version/permissions
       try {
         await ElMessageBox.confirm(
@@ -378,9 +406,9 @@ export default defineComponent({
       this.installAbort = abort;
       this.installProgress = { active: true, progress: 0, phase: 'downloading' };
       try {
+        // 插件包直接从市场登记的安装包地址下载（不经过市场下载代理）。
         await installPluginFromMarket(release, {
           signal: abort.signal,
-          allowedHosts: DEFAULT_ALLOWED_DOWNLOAD_HOSTS,
           onProgress: (p) => {
             const phases: Record<string, number> = { downloading: 10, hashing: 30, extracting: 55, validating: 70, importing: 85, succeeded: 100 };
             this.installProgress = { active: ['downloading', 'hashing', 'extracting', 'validating', 'importing'].includes(p.phase), progress: phases[p.phase] ?? p.progress, phase: p.phase };
@@ -431,6 +459,25 @@ export default defineComponent({
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 16px;
+}
+.market-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.market-back {
+  flex-shrink: 0;
+  margin-left: 2px;
+  padding: 0 4px;
+  color: #8b7e9a;
+  font-size: 13px;
+  background: transparent;
+  border-color: transparent;
+}
+.market-back:hover {
+  color: #8b6cc1;
+  background: transparent;
+  border-color: transparent;
 }
 .market-title {
   position: relative;

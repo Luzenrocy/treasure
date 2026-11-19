@@ -1,0 +1,29 @@
+role: writer
+round: 1
+iteration: 1
+read_at: "2026-11-14"
+shared_inputs:
+  - path: "docs/council/user-brief.md"
+  - path: "docs/council/requirements-ledger.yaml"
+  - path: "docs/council/adaptive-contract.yaml"
+  - path: "docs/council/source-index.md"
+  - path: "docs/council/rules-snapshot.yaml"
+  - path: "docs/council/memory.md"
+  - path: "docs/council/manifest.yaml"
+rules_snapshot: "docs/council/rules-snapshot.yaml"
+contract: "docs/council/adaptive-contract.yaml"
+evidence_followed:
+  - S-001
+  - S-002
+  - S-003
+  - S-004
+  - S-005
+  - S-006
+  - S-007
+  - S-008
+  - S-009
+constraints:
+  - "只陈述索引来源和本轮命令结果支持的事实。"
+  - "区分活动源码、锁文件和既有生成构件。"
+  - "不得把未执行的真实 Tauri iframe E2E 表述为通过。"
+  - "未修改三个项目的业务实现。"

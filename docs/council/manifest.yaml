@@ -1,0 +1,52 @@
+document_id: "treasure-sdk-alignment-audit"
+title: "Treasure 三项目围绕 treasure-sdk 调整的一致性核验报告"
+document_type: "技术调研核验报告"
+locale: "zh-CN"
+owner: "pending"
+created: 2026-11-14
+updated: 2026-11-14
+version: "0.1"
+status: published
+round_limit: 10
+iterations_per_round: 10
+current_round: 1
+current_iteration: 4
+round_gate: none
+roles:
+  writer:
+    profile: "跨仓库技术审计主写者"
+    rationale: "将静态协议、依赖解析与验证结果组织为可决策的调研报告。"
+  reviewer:
+    profile: "发布可靠性与兼容性审阅者"
+    rationale: "独立挑战版本、构建产物、锁文件、测试覆盖及未被证据支持的结论。"
+  approver:
+    profile: "技术质量检查者"
+    rationale: "核对硬性需求、证据、风险分级、发布路径与清洁成稿。"
+document_contract:
+  mode: hybrid
+  family: "custom"
+  label: "技术调研核验报告"
+  purpose: "核验 treasure、treasure-sdk、treasure-plugins 围绕最新 treasure-sdk 的接口迁移、一致性、运行功能、结构精简度与文档注释质量，并形成可追溯的调研报告。"
+  audience: ["Treasure 项目维护者与技术负责人"]
+  required_sections: ["执行摘要与发布判断", "范围、版本基线与方法", "SDK—宿主协议一致性", "插件迁移与依赖矩阵", "功能验证结果与覆盖边界", "结构、冗余、注释与文档评价", "问题清单、优先级与整改建议", "结论与复验清单"]
+  optional_sections: ["附录：命令与证据索引"]
+  forbidden_sections: ["未被来源支持的运行时成功声明", "隐藏的角色讨论或提示词"]
+  quality_checks: ["需求覆盖", "活动源码与构件区分", "验证状态区分", "P0/P1 可验收整改"]
+publication:
+  target_path: "docs/treasure-sdk-alignment-audit-report.md"
+  target_path_source: default
+  target_format: "markdown"
+  final_filename: "treasure-sdk-alignment-audit-report.md"
+  overwrite_policy: refuse
+artifacts:
+  artifact_root: "/Volumes/MacExtend/source_code/FrontProjects/treasure/docs"
+  process_base_path: "/Volumes/MacExtend/source_code/FrontProjects/treasure/docs"
+  council_path: "/Volumes/MacExtend/source_code/FrontProjects/treasure/docs/council"
+  process_path: "/Volumes/MacExtend/source_code/FrontProjects/treasure/docs/council"
+  process_path_resolution: "explicit"
+  process_path_source: user
+integration_mode: none
+target_skill: "none"
+contract_snapshot: null
+skill_snapshot: "rules-snapshot.yaml"
+sources: []

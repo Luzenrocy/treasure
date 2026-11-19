@@ -1,0 +1,95 @@
+version: 1
+source_message: "2026-11-14 user request"
+entries:
+  - id: U-001
+    type: goal
+    verbatim: "对treasure 、treasure-sdk、treasure-plugins 三个项目进行了调整优化，接下来我需要你对这三个项目进行核验"
+    normalized: "以当前三个工作区的未提交状态为核验对象，完成跨仓库审计。"
+    hardness: hard
+    priority: P0
+    acceptance: "报告明确范围、版本基线、证据来源和核验结论。"
+    verification: "读取当前源码、清单、锁文件、构建产物与测试结果。"
+    owner: "Treasure 维护团队"
+    status: satisfied
+    document_refs: ["报告 §1, §2"]
+    last_checked_round: 1
+    last_checked_iteration: 1
+  - id: U-002
+    type: must
+    verbatim: "三个项目围绕treasure-sdk进行的调整是否一致"
+    normalized: "核对 SDK 2.3.0、宿主 2.4.0 与插件声明、桥接协议、能力映射和最低版本门槛的一致性。"
+    hardness: hard
+    priority: P0
+    acceptance: "报告给出一致项、不一致项及其证据。"
+    verification: "静态协议映射比对、版本/manifest/lockfile 检查、契约测试。"
+    owner: "Treasure 维护团队"
+    status: satisfied
+    document_refs: ["报告 §3, §4"]
+    last_checked_round: 1
+    last_checked_iteration: 1
+  - id: U-003
+    type: must
+    verbatim: "是否还存在插件在使用旧sdk接口 或sdk接口调用逻辑或功能与最新版本不匹配的情况"
+    normalized: "扫描活动插件源码中的旧 API、原始 bridge 调用及对 SDK 2.3 菜单 API 的使用，并检查依赖解析。"
+    hardness: hard
+    priority: P0
+    acceptance: "逐插件说明活动代码调用情况与任何旧版本解析风险。"
+    verification: "源码检索、入口检查、package.json/package-lock.json 与 node_modules 解析检查。"
+    owner: "Treasure 维护团队"
+    status: satisfied
+    document_refs: ["报告 §4"]
+    last_checked_round: 1
+    last_checked_iteration: 1
+  - id: U-004
+    type: must
+    verbatim: "这次的调整优化是否导致插件、接口、宿主的功能无法正常使用 或与预期不一致"
+    normalized: "执行现有类型检查和测试，区分通过、失败、未覆盖和环境限制，并评估跨进程桥接功能。"
+    hardness: hard
+    priority: P0
+    acceptance: "报告说明验证命令、结果、功能风险及未验证边界。"
+    verification: "npm 类型检查、SDK/宿主/插件测试、构建与静态调用链审计。"
+    owner: "Treasure 维护团队"
+    status: satisfied
+    document_refs: ["报告 §5"]
+    last_checked_round: 1
+    last_checked_iteration: 1
+  - id: U-005
+    type: must
+    verbatim: "代码结构设计是否合理、精简，是否存在冗余，注释是否完善"
+    normalized: "审查桥接边界、重复协议定义、冗余兼容层、构建产物、测试可移植性及注释/文档同步。"
+    hardness: hard
+    priority: P1
+    acceptance: "报告给出有证据的设计评价和可执行的整改优先级。"
+    verification: "代码/注释/文档/构建产物检查与 git diff --check。"
+    owner: "Treasure 维护团队"
+    status: satisfied
+    document_refs: ["报告 §6, §7"]
+    last_checked_round: 1
+    last_checked_iteration: 1
+  - id: U-006
+    type: format
+    verbatim: "输出一份调研报告给我"
+    normalized: "以中文 Markdown 输出面向维护者的技术调研报告。"
+    hardness: hard
+    priority: P0
+    acceptance: "报告已发布到 docs/treasure-sdk-alignment-audit-report.md。"
+    verification: "最终检查目标文件与 council 发布记录。"
+    owner: "Codex"
+    status: open
+    document_refs: []
+    last_checked_round: 0
+    last_checked_iteration: 0
+  - id: U-007
+    type: scope
+    verbatim: "当前…三个项目"
+    normalized: "不修改三个项目的业务实现；只生成核验报告与过程留档。"
+    hardness: hard
+    priority: P1
+    acceptance: "没有对业务源码、插件声明或锁文件做修复性改动。"
+    verification: "审计本轮变更范围。"
+    owner: "Codex"
+    status: satisfied
+    document_refs: ["报告 §1"]
+    last_checked_round: 1
+    last_checked_iteration: 1
+amendments: []

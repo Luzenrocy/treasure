@@ -2,6 +2,8 @@ import { query, execute, transaction, buildBatchDeleteSql } from '@/sql/common';
 import { readonlyTransaction, normalizeError } from '@/sql/dbClient';
 import { Response } from '@/class';
 import { buildDebugIconDownloadPlan } from '@/utils/debugPluginAssets';
+import { assertMinimumPlatformVersion, isSemver, PlatformVersionError } from '@/utils/platformVersion';
+import { fileGrants } from '@/bridge/fileGrants';
 
 export const PLUGIN_TYPE_NORMAL = 0;
 export const PLUGIN_TYPE_DEBUG = 1;
@@ -73,54 +75,39 @@ export async function isPluginCodeExists(pluginCode: string): Promise<Response> 
 }
 
 export async function deletePluginById(pluginId: number): Promise<Response> {
-    const plugin = await query('SELECT plugin_code FROM tp_plugin WHERE id = ?', [pluginId]);
-    if (plugin.code === 1 && plugin.data[0]?.plugin_code === 'treasure') {
-        return Response.errorPermission('禁止删除系统参数插件');
-    }
-
-    // 清理插件数据表（调试插件同样需要清理 manifest 创建的表）
-    if (plugin.code === 1 && plugin.data[0]?.plugin_code) {
-        await execDestroyScript(plugin.data[0].plugin_code);
-        await cleanupPluginTables(plugin.data[0].plugin_code);
-        await cleanupPluginPrivateStorage(plugin.data[0].plugin_code);
-    }
-
-    const sqls = [
-        ...(plugin.code === 1 && plugin.data[0]?.plugin_code
-            ? [{
-                sql: 'DELETE FROM access_grant WHERE subject_type = ? AND subject_id = ? AND resource_type = ?',
-                params: ['plugin', plugin.data[0].plugin_code, 'filesystem_directory'],
-            }]
-            : []),
-        { sql: 'DELETE FROM tp_setting WHERE plugin_id = ?' },
-        { sql: 'DELETE FROM tp_menu WHERE plugin_id = ?' },
-        { sql: 'DELETE FROM tp_plugin WHERE id = ?' },
-    ];
-    return transaction(sqls.map(s => ({ ...s, params: s.params ?? [pluginId] })));
+    return batchDeletePlugins([pluginId]);
 }
 
 export async function batchDeletePlugins(pluginIds: number[]): Promise<Response> {
     if (pluginIds.length === 0) return Response.ok({ deleted: 0 });
+    const ids = [...new Set(pluginIds)];
     const pluginCodes: string[] = [];
-    for (const id of pluginIds) {
+    for (const id of ids) {
         const plugin = await query('SELECT plugin_code FROM tp_plugin WHERE id = ?', [id]);
-        if (plugin.code === 1 && plugin.data[0]?.plugin_code) {
-            const pluginCode = plugin.data[0].plugin_code;
-            pluginCodes.push(pluginCode);
-            await execDestroyScript(pluginCode);
-            await cleanupPluginTables(pluginCode);
-            await cleanupPluginPrivateStorage(pluginCode);
-        }
+        if (plugin.code !== 1) return plugin;
+        const pluginCode = plugin.data[0]?.plugin_code;
+        if (pluginCode === 'treasure') return Response.errorPermission('禁止删除系统参数插件');
+        if (pluginCode) pluginCodes.push(pluginCode);
     }
-    return transaction([
-        ...pluginCodes.map(pluginCode => ({
-            sql: 'DELETE FROM access_grant WHERE subject_type = ? AND subject_id = ? AND resource_type = ?',
-            params: ['plugin', pluginCode, 'filesystem_directory'],
-        })),
-        buildBatchDeleteSql('tp_setting', 'plugin_id', pluginIds),
-        buildBatchDeleteSql('tp_menu', 'plugin_id', pluginIds),
-        buildBatchDeleteSql('tp_plugin', 'id', pluginIds),
+    for (const pluginCode of pluginCodes) {
+        await execDestroyScript(pluginCode);
+        await cleanupPluginTables(pluginCode);
+        await cleanupPluginPrivateStorage(pluginCode);
+    }
+    const now = Date.now();
+    const removed = await transaction([
+        {
+            sql: `UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ?
+                  WHERE subject_type = 'plugin' AND resource_type = 'filesystem_directory' AND status = 'active'
+                    AND subject_id IN (SELECT plugin_code FROM tp_plugin WHERE id IN (${ids.map(() => '?').join(', ')}))`,
+            params: [now, now, ...ids],
+        },
+        buildBatchDeleteSql('tp_setting', 'plugin_id', ids),
+        buildBatchDeleteSql('tp_menu', 'plugin_id', ids),
+        buildBatchDeleteSql('tp_plugin', 'id', ids),
     ]);
+    if (removed.code === 1) pluginCodes.forEach(code => fileGrants.revokePlugin(code));
+    return removed;
 }
 
 export async function getPluginSettings(pluginId: number): Promise<Response> {
@@ -147,57 +134,108 @@ export async function getAllSettings(): Promise<Response> {
 }
 
 /**
- * Records durable directory authorization independently from plugin settings.
- * `permissionKey` is a stable identifier chosen in plugin source code. A
- * matching `dir` setting stores the current path and grant ID. Later reads
- * use that setting as the path source, while this grant only verifies it.
+ * Replaces the current binding atomically after a user selects a directory.
+ * Each selection creates its own authorization record for this permission key.
  */
 export async function grantPluginDirectoryPermission(pluginCode: string, permissionKey: string, path: string, displayName: string): Promise<Response> {
-    const setting = await query(`SELECT ts.param_value FROM tp_setting ts JOIN tp_plugin tp ON tp.id = ts.plugin_id WHERE tp.plugin_code = ? AND ts.param_key = ? AND ts.param_type = 'dir' LIMIT 1`, [pluginCode, permissionKey]);
+    const installation = fileGrants.installation(pluginCode);
+    const setting = await findPluginDirectorySetting(pluginCode, permissionKey);
     if (setting.code !== 1) return setting;
-    // Granting follows a successful settings write in the same user flow.
-    // Compare normalized host paths directly here; hashing is only the public
-    // verification contract and must not prevent the initial authorization.
-    if (!setting.data[0] || normalizeDirectoryPath(setting.data[0].param_value) !== normalizeDirectoryPath(path)) {
-        return Response.errorPermission('目录设置与待授权目录不一致，请重新选择目录');
-    }
+    const current = setting.data[0];
+    if (!current || fileGrants.installation(pluginCode) !== installation) return Response.errorNotFound('插件目录设置已不存在');
     const grantId = crypto.randomUUID();
     const now = Date.now();
     const saved = await transaction([
-        { sql: "UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? AND status = 'active'", params: [now, now, pluginCode, permissionKey] },
-        { sql: "INSERT INTO access_grant (grant_id, subject_type, subject_id, resource_type, permission_key, resource_locator, resource_display_name, access_scope, status, granted_by, granted_at, revoked_at, created_at, updated_at) VALUES (?, 'plugin', ?, 'filesystem_directory', ?, ?, ?, 'read_write', 'active', 'user_selection', ?, NULL, ?, ?)", params: [grantId, pluginCode, permissionKey, path, displayName, now, now, now] },
-        { sql: "UPDATE tp_setting SET access_grant_id = ?, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND param_type = 'dir'", params: [grantId, now, pluginCode, permissionKey] },
+        {
+            sql: `UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ?
+                  WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory'
+                    AND permission_key = ? AND status = 'active'
+                    AND EXISTS (SELECT 1 FROM tp_setting WHERE id = ? AND plugin_id = ? AND param_key = ? AND param_type = 'dir')`,
+            params: [now, now, pluginCode, permissionKey, current.id, current.plugin_id, permissionKey],
+        },
+        {
+            sql: `INSERT INTO access_grant (grant_id, subject_type, subject_id, resource_type, permission_key, resource_locator,
+                                           resource_display_name, access_scope, status, granted_by, granted_at, created_at, updated_at)
+                  SELECT ?, 'plugin', ?, 'filesystem_directory', ?, ?, ?, 'read_write', 'active', 'user_selection', ?, ?, ?
+                  FROM tp_setting WHERE id = ? AND plugin_id = ? AND param_key = ? AND param_type = 'dir'`,
+            params: [grantId, pluginCode, permissionKey, path, displayName, now, now, now, current.id, current.plugin_id, permissionKey],
+        },
+        {
+            sql: "UPDATE tp_setting SET param_value = ?, access_grant_id = ?, updated_at = ? WHERE id = ? AND plugin_id = ? AND param_key = ? AND param_type = 'dir'",
+            params: [path, grantId, now, current.id, current.plugin_id, permissionKey],
+        },
     ]);
     if (saved.code !== 1) return saved;
+    if (saved.data[2].affectedRows === 0) return Response.errorNotFound('插件目录设置已不存在');
     return Response.ok({ grant_id: grantId, resource_locator: path, resource_display_name: displayName });
 }
 
+function findPluginDirectorySetting(pluginCode: string, permissionKey: string) {
+    return query(`SELECT ts.id, ts.plugin_id, ts.param_value, ts.access_grant_id
+                  FROM tp_setting ts JOIN tp_plugin tp ON tp.id = ts.plugin_id
+                  WHERE tp.plugin_code = ? AND ts.param_key = ? AND ts.param_type = 'dir' LIMIT 1`, [pluginCode, permissionKey]);
+}
+
 export async function verifyPluginDirectoryGrant(pluginCode: string, permissionKey: string, accessGrantId: string, pathHash: string): Promise<Response> {
-    const verified = await query(`SELECT grant_id, resource_locator, resource_display_name FROM access_grant WHERE subject_type = ? AND subject_id = ? AND resource_type = ? AND grant_id = ? AND permission_key = ? AND status = 'active' LIMIT 1`, ['plugin', pluginCode, 'filesystem_directory', accessGrantId, permissionKey]);
-    const record = verified.code === 1 ? verified.data[0] : undefined;
-    if (!record) return Response.errorPermission('目录授权不存在、已撤销或引用已过期');
-    if (await directoryPathHash(record.resource_locator) !== pathHash) return Response.errorPermission('目录设置与当前授权不一致，请重新授权');
+    const setting = await findPluginDirectorySetting(pluginCode, permissionKey);
+    if (setting.code !== 1) return setting;
+    const current = setting.data[0];
+    if (!current || current.access_grant_id !== accessGrantId) return missingDirectoryGrant();
+    const verified = await getDirectoryAccessGrant(pluginCode, accessGrantId, permissionKey);
+    if (verified.code === -3) {
+        const now = Date.now();
+        // Repair only the checked binding. A concurrent reauthorization may already have replaced it.
+        const cleared = await transaction([
+            {
+                sql: `UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ?
+                      WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory'
+                        AND permission_key = ? AND grant_id = ? AND status = 'active'
+                        AND EXISTS (SELECT 1 FROM tp_setting WHERE id = ? AND access_grant_id = ? AND param_value IS ?)`,
+                params: [now, now, pluginCode, permissionKey, accessGrantId, current.id, accessGrantId, current.param_value],
+            },
+            {
+                sql: 'UPDATE tp_setting SET access_grant_id = NULL, updated_at = ? WHERE id = ? AND access_grant_id = ? AND param_value IS ?',
+                params: [now, current.id, accessGrantId, current.param_value],
+            },
+        ]);
+        return cleared.code === 1 ? verified : cleared;
+    }
+    if (verified.code !== 1) return verified;
+    const record = verified.data;
+    // The caller's hash can be stale; it cannot by itself invalidate durable state.
+    if (await directoryPathHash(record.resource_locator) !== pathHash) {
+        return Response.errorPermission('目录设置已变化，请重新读取目录授权');
+    }
     return Response.ok(record);
+}
+
+function missingDirectoryGrant(): Response {
+    return Response.errorNotFound('目录授权不存在、已撤销或与当前设置不一致');
 }
 
 export async function revokePluginDirectoryPermission(pluginCode: string, permissionKey: string): Promise<Response> {
     const current = await query(`SELECT grant_id FROM access_grant WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory' AND permission_key = ? AND status = 'active' LIMIT 1`, [pluginCode, permissionKey]);
-    if (current.code !== 1 || !current.data[0]) return Response.errorPermission('目录授权不存在、已撤销或引用已过期');
+    if (current.code !== 1) return current;
+    if (!current.data[0]) return missingDirectoryGrant();
     const now = Date.now();
     const grantId = current.data[0].grant_id;
-    const revoked = await execute(`UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE grant_id = ? AND subject_type = 'plugin' AND subject_id = ?`, [now, now, grantId, pluginCode]);
+    const revoked = await transaction([
+        { sql: "UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE grant_id = ? AND subject_type = 'plugin' AND subject_id = ? AND status = 'active'", params: [now, now, grantId, pluginCode] },
+        {
+            sql: `UPDATE tp_setting SET access_grant_id = NULL, updated_at = ?
+                  WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND access_grant_id = ?`,
+            params: [now, pluginCode, permissionKey, grantId],
+        },
+    ]);
     if (revoked.code !== 1) return revoked;
+    fileGrants.revokeRootGrant(pluginCode, grantId);
     return Response.ok({ grant_id: grantId });
 }
 
 /** Trusted host settings UI entry: paths never cross the plugin bridge. */
 export async function selectPluginStorageDirectory(pluginCode: string, settingKey: string, path: string): Promise<Response> {
     const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
-    const configured = await setPluginDirectorySetting(pluginCode, settingKey, path);
-    if (configured.code !== 1) return configured;
-    const granted = await grantPluginDirectoryPermission(pluginCode, settingKey, path, name);
-    if (granted.code !== 1) return granted;
-    return granted;
+    return grantPluginDirectoryPermission(pluginCode, settingKey, path, name);
 }
 
 /**
@@ -205,12 +243,19 @@ export async function selectPluginStorageDirectory(pluginCode: string, settingKe
  * cache is recreated. The plugin identity is part of the lookup, so an ID
  * obtained by another plugin can never be resolved.
  */
-export async function getDirectoryAccessGrant(pluginCode: string, grantId: string): Promise<Response> {
-    const res = await query(`SELECT grant_id, resource_locator, resource_display_name, status FROM access_grant
-        WHERE subject_type = 'plugin' AND subject_id = ? AND grant_id = ?
-          AND resource_type = 'filesystem_directory' AND status = 'active'`, [pluginCode, grantId]);
-    if (res.code !== 1 || !res.data[0]) return Response.errorPermission('目录授权不存在、已撤销或不属于当前插件');
-    return Response.ok(res.data[0]);
+export async function getDirectoryAccessGrant(pluginCode: string, grantId: string, permissionKey: string | null = null): Promise<Response> {
+    const res = await query(`SELECT ag.grant_id, ag.resource_locator, ag.resource_display_name, ag.status, ts.param_value AS configured_path
+        FROM access_grant ag
+        JOIN tp_plugin tp ON tp.plugin_code = ag.subject_id
+        JOIN tp_setting ts ON ts.plugin_id = tp.id AND ts.param_key = ag.permission_key
+                          AND ts.param_type = 'dir' AND ts.access_grant_id = ag.grant_id
+        WHERE ag.subject_type = 'plugin' AND ag.subject_id = ? AND ag.grant_id = ?
+          AND ag.resource_type = 'filesystem_directory' AND ag.status = 'active'
+          AND (? IS NULL OR ag.permission_key = ?)`, [pluginCode, grantId, permissionKey, permissionKey]);
+    if (res.code !== 1) return res;
+    const grant = res.data[0];
+    if (!grant?.configured_path || normalizeDirectoryPath(grant.configured_path) !== normalizeDirectoryPath(grant.resource_locator)) return missingDirectoryGrant();
+    return Response.ok(grant);
 }
 
 const PLUGIN_CENTER_MENU_ID = '100002';
@@ -365,6 +410,10 @@ export function validateManifest(manifest: any): { valid: boolean; errors: strin
         errors.push('version 必须为 semver 格式（如 1.0.0）');
     }
 
+    if (manifest.minPlatformVersion && !isSemver(manifest.minPlatformVersion)) {
+        errors.push('minPlatformVersion 必须为 semver 格式（如 2.3.0）');
+    }
+
     // ── 图标字段校验 ────────────────────────────────────────
     if (manifest.icon !== undefined) {
         const iconErrors = validateIconRef(manifest.icon, 'icon');
@@ -458,13 +507,10 @@ export async function upgradePlugin(pluginCode: string, manifest: any): Promise<
         return Response.errorParam('新版本号必须大于当前版本');
     }
 
-    if (manifest.minPlatformVersion) {
-        const latestVer = getLatestVersionStatic();
-        if (!isCompatibleVersion(manifest.minPlatformVersion, latestVer)) {
-            return Response.errorParam(
-                `插件要求最低平台版本 ${manifest.minPlatformVersion}，当前平台版本 ${latestVer}`
-            );
-        }
+    try {
+        await assertMinimumPlatformVersion(manifest.minPlatformVersion);
+    } catch (error) {
+        return Response.errorParam(error instanceof PlatformVersionError ? error.message : '无法读取当前 Treasure 版本');
     }
 
     return transaction([
@@ -473,15 +519,6 @@ export async function upgradePlugin(pluginCode: string, manifest: any): Promise<
         { sql: 'UPDATE tp_menu SET menu_name=?, show_order=?, updated_at=? WHERE plugin_id=?',
           params: [manifest.menu.name, manifest.menu.order||0, Date.now(), oldPlugin.data.id] },
     ]);
-}
-
-export function isCompatibleVersion(required: string, current: number): boolean {
-    const major = parseInt(required.split('.')[0]);
-    return current >= major;
-}
-
-function getLatestVersionStatic(): number {
-    return 5;
 }
 
 export async function createDebugPlugin({ pluginCode, pluginAlias, debugUrl, manifest, initScripts }: { pluginCode: string; pluginAlias: string; debugUrl: string; manifest?: any; initScripts?: Record<string, string> }): Promise<Response> {
@@ -501,6 +538,11 @@ export async function createDebugPlugin({ pluginCode, pluginAlias, debugUrl, man
         const validation = validateManifest(manifest);
         if (!validation.valid) {
             return Response.errorParam(`manifest 校验失败: ${validation.errors.join('; ')}`);
+        }
+        try {
+            await assertMinimumPlatformVersion(manifest.minPlatformVersion);
+        } catch (error) {
+            return Response.errorParam(error instanceof PlatformVersionError ? error.message : '无法读取当前 Treasure 版本');
         }
         try {
             // 先验证并缓存图标；静态资源不可用时不留下一个“注册成功但没有图标”的插件。
@@ -583,6 +625,11 @@ export async function syncDebugPluginManifest({
     const validation = validateManifest(manifest);
     if (!validation.valid) {
         return Response.errorParam(`manifest 校验失败: ${validation.errors.join('; ')}`);
+    }
+    try {
+        await assertMinimumPlatformVersion(manifest.minPlatformVersion);
+    } catch (error) {
+        return Response.errorParam(error instanceof PlatformVersionError ? error.message : '无法读取当前 Treasure 版本');
     }
 
     const pluginRes = await getPluginByCode(pluginCode);
@@ -1026,8 +1073,24 @@ export async function upsertSettingByKey(pluginCode: string, paramKey: string, v
 
 /** Updates only the configured path for a directory setting and invalidates its old binding. */
 export async function setPluginDirectorySetting(pluginCode: string, paramKey: string, path: string): Promise<Response> {
+    const setting = await findPluginDirectorySetting(pluginCode, paramKey);
+    if (setting.code !== 1) return setting;
+    const current = setting.data[0];
+    if (!current) return Response.errorNotFound('插件未声明此目录设置');
     const now = Date.now();
-    return execute(`UPDATE tp_setting SET param_value = ?, access_grant_id = NULL, updated_at = ? WHERE plugin_id = (SELECT id FROM tp_plugin WHERE plugin_code = ?) AND param_key = ? AND param_type = 'dir'`, [path, now, pluginCode, paramKey]);
+    return transaction([
+        {
+            sql: `UPDATE access_grant SET status = 'revoked', revoked_at = ?, updated_at = ?
+                  WHERE subject_type = 'plugin' AND subject_id = ? AND resource_type = 'filesystem_directory'
+                    AND permission_key = ? AND status = 'active'
+                    AND EXISTS (SELECT 1 FROM tp_setting WHERE id = ? AND param_value IS NOT ?)`,
+            params: [now, now, pluginCode, paramKey, current.id, path],
+        },
+        {
+            sql: 'UPDATE tp_setting SET param_value = ?, access_grant_id = NULL, updated_at = ? WHERE id = ? AND param_value IS NOT ?',
+            params: [path, now, current.id, path],
+        },
+    ]);
 }
 
 async function projectPluginSetting(setting: any) {

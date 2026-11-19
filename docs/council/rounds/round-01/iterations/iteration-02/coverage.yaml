@@ -1,0 +1,11 @@
+iteration: "round-01/iteration-02"
+draft: "draft.md"
+revision_input: "../iteration-01/review.md#R-001"
+requirements:
+  - { id: U-001, locations: ["§1", "§2"], evidence: ["S-001", "S-003", "S-005", "S-009"], status: covered }
+  - { id: U-002, locations: ["§3", "§4"], evidence: ["S-001", "S-002", "S-003", "S-004", "S-005"], status: covered }
+  - { id: U-003, locations: ["§4"], evidence: ["S-005", "S-006", "S-007", "S-009"], status: covered }
+  - { id: U-004, locations: ["§1", "§5", "§7", "§8"], evidence: ["S-004", "S-009", "memory.md", "../iteration-01/review.md#R-001"], status: covered_with_e2e_boundary }
+  - { id: U-005, locations: ["§6", "§7"], evidence: ["S-001", "S-002", "S-003", "S-004", "S-008", "S-009"], status: covered }
+  - { id: U-006, locations: ["entire draft"], evidence: ["adaptive-contract.yaml"], status: draft_only_pending_publication }
+  - { id: U-007, locations: ["§1", "§2"], evidence: ["requirements-ledger.yaml", "manifest.yaml"], status: covered }

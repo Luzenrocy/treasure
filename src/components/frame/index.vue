@@ -6,31 +6,13 @@ import DiamondIcon from "@/assets/diamond.svg?component"
 import {useMenuStore} from "@/store/menu";
 import {useTabsStore} from "@/store/tabs";
 import {useMenuRegistry} from "@/store/menuRegistry";
-import {dispatchMenuEvent} from "@/bridge/pluginBridge";
+import {MENU_LABEL_ALIASES, findSubmenuRecursive, removeMenuItem, moveItemToEnd, mountPluginMenus} from "@/bridge/pluginBridge";
 import {MenuItem} from '@/class';
 import {getCurrentWindow} from '@tauri-apps/api/window';
 import {invoke} from '@tauri-apps/api/core';
-import {Menu, Submenu, MenuItem as TauriMenuItem, CheckMenuItem, PredefinedMenuItem} from '@tauri-apps/api/menu';
+import {Menu, Submenu, MenuItem as TauriMenuItem, CheckMenuItem, PredefinedMenuItem, type SubmenuOptions} from '@tauri-apps/api/menu';
 import { logEvent } from '@/utils/logger';
 import type {RouteLocationNormalizedLoaded} from 'vue-router';
-
-/** macOS 默认菜单本地化映射 */
-const MENU_LABEL_ALIASES: Record<string, string[]> = {
-  'View': ['显示'],
-  '显示': ['View'],
-  'File': ['文件'],
-  '文件': ['File'],
-  'Edit': ['编辑'],
-  '编辑': ['Edit'],
-  'Window': ['窗口'],
-  '窗口': ['Window'],
-  'Help': ['帮助'],
-  '帮助': ['Help'],
-  'Close Window': ['关闭窗口'],
-  '关闭窗口': ['Close Window'],
-  'Toggle Full Screen': ['Enter Full Screen', '切换全屏', '进入全屏'],
-  'Enter Full Screen': ['Toggle Full Screen', '切换全屏', '进入全屏'],
-};
 
 export default defineComponent({
   name: 'frame',
@@ -81,56 +63,11 @@ export default defineComponent({
       this.tabsStore.setActiveTab(path)
       this.$router.push(path)
     },
-    getCacheKey(route: RouteLocationNormalizedLoaded): string {
+getCacheKey(route: RouteLocationNormalizedLoaded): string {
       return this.tabsStore.getCacheKey(
         route.name as string,
         route.params as Record<string, any>
       )
-    },
-    async getItemText(item: any): Promise<string | undefined> {
-      const val = (item as any).text;
-      if (typeof val === 'function') return await val.call(item);
-      if (typeof val?.then === 'function') return await val;
-      if (typeof val === 'string') return val;
-      return undefined;
-    },
-    async removeItem(parent: any, targetLabels: string[]) {
-      const items = await parent.items();
-      for (const item of items) {
-        const t = await this.getItemText(item);
-        if (t && targetLabels.includes(t)) {
-          await parent.remove(item);
-          return;
-        }
-      }
-    },
-    async moveItemToEnd(parent: any, targetLabels: string[]) {
-      const items = await parent.items();
-      for (const item of items) {
-        const t = await this.getItemText(item);
-        if (t && targetLabels.includes(t)) {
-          await parent.remove(item);
-          await parent.append(item);
-          return;
-        }
-      }
-    },
-    async findSubmenuRecursive(items: any[], targetTexts: string[]): Promise<any | null> {
-      for (const item of items) {
-        try {
-          const t = await this.getItemText(item);
-          if (!t) continue;
-          if (targetTexts.includes(t)) return item;
-          if (typeof item.items === 'function') {
-            const children = await item.items();
-            if (children && children.length > 0) {
-              const found = await this.findSubmenuRecursive(children, targetTexts);
-              if (found) return found;
-            }
-          }
-        } catch (_) {}
-      }
-      return null;
     },
     async rebuildMenu() {
       try {
@@ -139,50 +76,36 @@ export default defineComponent({
         const menu = await Menu.default();
         this.menuRegistry.clearHandles();
         const menuItems = await menu.items();
-        for (const r of regs) {
-          const pluginItems = await Promise.all(r.items.map(async it => {
-            const itemId = it.id, menuId = r.menuId;
-            const action = () => dispatchMenuEvent(activeCode!, menuId, itemId);
-            let handle: TauriMenuItem | CheckMenuItem | PredefinedMenuItem;
-            if (it.type === 'check')
-              handle = await CheckMenuItem.new({ text: it.label, checked: !!it.checked, accelerator: it.accelerator, action });
-            else if (it.type === 'separator' || it.id === '')
-              handle = await PredefinedMenuItem.new({ item: 'Separator' });
-            else
-              handle = await TauriMenuItem.new({ text: it.label, accelerator: it.accelerator, action });
-            this.menuRegistry.cacheHandle(activeCode!, menuId, itemId, handle);
-            return handle;
-          })).then(list => list.filter(Boolean));
-          if (pluginItems.length === 0) continue;
-          const searchLabels = [r.rootLabel, ...(MENU_LABEL_ALIASES[r.rootLabel] || [])];
-          const rootMenu = await this.findSubmenuRecursive(menuItems, searchLabels);
-if (r.submenuLabel) {
-            const submenu = await Submenu.new({ text: r.submenuLabel, items: pluginItems });
-            if (rootMenu) {
-              await rootMenu.append(submenu);
-            } else {
-              const fallback = await Submenu.new({ text: r.rootLabel, items: [submenu] });
-              await menu.append(fallback);
-            }
-          } else {
-            if (rootMenu) {
-              for (const handle of pluginItems) await rootMenu.append(handle);
-            } else {
-              const top = await Submenu.new({ text: r.rootLabel, items: pluginItems });
-              await menu.append(top);
-            }
-          }
+        // 插件菜单构建委托给 MenuBuilder（建议 5：从组件解耦，便于单测与多平台适配）
+        if (activeCode) {
+          const cacheHandle = (pluginCode: string, menuId: string, itemId: string, handle: unknown) =>
+            this.menuRegistry.cacheHandle(pluginCode, menuId, itemId, handle);
+          // Tauri 通过 Submenu 的 rid 和 kind 识别已创建的原生菜单。
+          const newSubmenu = (text: string, items: unknown[]): Promise<Submenu> =>
+            Submenu.new({ text, items: items as SubmenuOptions['items'] });
+          const newCheckMenuItem = (opts: { text: string; checked: boolean; enabled?: boolean; accelerator?: string; action: () => void }) =>
+            CheckMenuItem.new(opts);
+          const newMenuItem = (opts: { text: string; enabled?: boolean; accelerator?: string; action: () => void }) =>
+            TauriMenuItem.new(opts);
+          const newSeparator = () => PredefinedMenuItem.new({ item: 'Separator' });
+          await mountPluginMenus(
+            { cacheHandle, newSubmenu, newCheckMenuItem, newMenuItem, newSeparator },
+            activeCode,
+            regs,
+            { append: (item: unknown) => menu.append(item as any) },
+            menuItems,
+          );
         }
         // 插件菜单追加到 View 菜单后，将"切换全屏"移到末尾，使插件菜单排在上面
         const viewSearchLabels = ['View', ...(MENU_LABEL_ALIASES['View'] || [])];
-        const viewMenu = await this.findSubmenuRecursive(menuItems, viewSearchLabels);
+        const viewMenu = await findSubmenuRecursive(menuItems, viewSearchLabels);
         if (viewMenu) {
           const fullScreenLabels = ['Toggle Full Screen', 'Enter Full Screen', '切换全屏', '进入全屏'];
-          await this.moveItemToEnd(viewMenu, fullScreenLabels);
+          await moveItemToEnd(viewMenu, fullScreenLabels);
         }
         // 宿主默认菜单：始终在 File 下追加关闭标签菜单
         const fileSearchLabels = ['File', ...(MENU_LABEL_ALIASES['File'] || [])];
-        const fileMenu = await this.findSubmenuRecursive(menuItems, fileSearchLabels);
+        const fileMenu = await findSubmenuRecursive(menuItems, fileSearchLabels);
         if (fileMenu) {
           const sep = await PredefinedMenuItem.new({ item: 'Separator' });
           const closeTab = await TauriMenuItem.new({ text: 'Close Current Tab', action: () => this.removeTab(this.tabsStore.activeTab) });
@@ -192,7 +115,7 @@ if (r.submenuLabel) {
           await fileMenu.append(closeAll);
           // 移除系统预定义 Close Window（自带 ⌘W 快捷键会产生 X 符号），替换为自定义不带 accelerator 的版本
           const closeWindowLabels = ['Close Window', ...(MENU_LABEL_ALIASES['Close Window'] || [])];
-          await this.removeItem(fileMenu, closeWindowLabels);
+          await removeMenuItem(fileMenu, closeWindowLabels);
           const closeWindow = await TauriMenuItem.new({ text: 'Close Window', action: () => invoke('close_window') });
           await fileMenu.append(closeWindow);
         }

@@ -1,0 +1,4 @@
+latest_iteration: "iterations/iteration-04/input-snapshot.yaml"
+rules_snapshot: "../../rules-snapshot.yaml"
+ledger_version: 1
+contract_snapshot: "../../adaptive-contract.yaml"

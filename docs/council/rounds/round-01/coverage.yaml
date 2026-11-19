@@ -1,0 +1,4 @@
+ledger_version: 1
+latest_iteration: "iterations/iteration-04/coverage.yaml"
+status: approved
+requirements: [U-001, U-002, U-003, U-004, U-005, U-006, U-007]

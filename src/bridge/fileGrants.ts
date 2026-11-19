@@ -14,7 +14,8 @@ export interface GrantRecord {
   pluginCode: string;
   path: string;
   kind: 'file' | 'directory';
-  access?: 'read' | 'write';
+  access?: 'read' | 'write' | 'read_write';
+  selectedDirectory?: boolean;
   /** Present only when this reference descends from a durable access grant. */
   rootGrantId?: string;
 }
@@ -34,6 +35,18 @@ export function isPathWithinGrantedRoot(targetPath: string, rootPath: string): b
 export class FileGrantService {
   private sequence = 0;
   private readonly grants = new Map<string, GrantRecord>();
+  private readonly installations = new Map<string, number>();
+
+  installation(pluginCode: string): number {
+    return this.installations.get(pluginCode) ?? 0;
+  }
+
+  revokePlugin(pluginCode: string): void {
+    this.installations.set(pluginCode, this.installation(pluginCode) + 1);
+    for (const [id, record] of this.grants) {
+      if (record.pluginCode === pluginCode) this.grants.delete(id);
+    }
+  }
 
   grantFile(pluginCode: string, path: string, rootGrantId?: string): FileGrant {
     return this.grant(pluginCode, path, 'file', 'read', rootGrantId) as FileGrant;
@@ -44,8 +57,27 @@ export class FileGrantService {
     return this.grant(pluginCode, path, 'file', 'write') as FileGrant;
   }
 
+  completeFileWrite(pluginCode: string, id: string): FileGrant | undefined {
+    const record = this.grants.get(id);
+    if (record?.pluginCode !== pluginCode || record.kind !== 'file' || record.access === 'read') return undefined;
+    record.access = 'read_write';
+    return { id, name: baseName(record.path), kind: 'file' };
+  }
+
+  grantSelectedDirectory(pluginCode: string, path: string): DirectoryGrant {
+    return this.grant(pluginCode, path, 'directory', undefined, undefined, true) as DirectoryGrant;
+  }
+
+  takeSelectedDirectory(pluginCode: string, id: string): Readonly<GrantRecord> | undefined {
+    const record = this.getDirectoryGrant(pluginCode, id);
+    if (!record?.selectedDirectory) return undefined;
+    this.grants.delete(id);
+    return record;
+  }
+
   grantDirectory(pluginCode: string, path: string, rootGrantId?: string): DirectoryGrant {
-    const existing = Array.from(this.grants.entries()).find(([, record]) => record.pluginCode === pluginCode && record.kind === 'directory' && record.path === path);
+    const existing = Array.from(this.grants.entries()).find(([, record]) => record.pluginCode === pluginCode && record.kind === 'directory'
+        && record.path === path && record.rootGrantId === rootGrantId && !record.selectedDirectory);
     if (existing) return { id: existing[0], name: baseName(path), kind: 'directory' };
     const grant = this.grant(pluginCode, path, 'directory', undefined, rootGrantId) as DirectoryGrant;
     return grant;
@@ -111,12 +143,12 @@ export class FileGrantService {
     return `${storageDirectory.replace(/[\\/]+$/, '')}/${key}`;
   }
 
-  private grant(pluginCode: string, path: string, kind: GrantRecord['kind'], access?: GrantRecord['access'], rootGrantId?: string): FileGrant | DirectoryGrant {
+  private grant(pluginCode: string, path: string, kind: GrantRecord['kind'], access?: GrantRecord['access'], rootGrantId?: string, selectedDirectory?: boolean): FileGrant | DirectoryGrant {
     const id = `file-grant-${++this.sequence}`;
     // A reference returned directly by a system dialog is valid for this
     // bridge session without being durable. Durable authorization is attached
     // only by permissions.grantDirectory / restoreDirectory.
-    this.grants.set(id, { pluginCode, path, kind, access, rootGrantId });
+    this.grants.set(id, { pluginCode, path, kind, access, rootGrantId, selectedDirectory });
     return { id, name: baseName(path), kind } as FileGrant | DirectoryGrant;
   }
 
@@ -127,9 +159,12 @@ export class FileGrantService {
 
   private resolve(pluginCode: string, id: string, kind: GrantRecord['kind'], access?: GrantRecord['access']): string | undefined {
     const record = this.grants.get(id);
-    return record?.pluginCode === pluginCode && record.kind === kind && (!access || record.access === access) ? record.path : undefined;
+    return record?.pluginCode === pluginCode && record.kind === kind
+        && (!access || record.access === access || record.access === 'read_write') ? record.path : undefined;
   }
 }
+
+export const fileGrants = new FileGrantService();
 
 function isPlainFileName(value: string): boolean {
   return Boolean(value)

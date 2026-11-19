@@ -15,4 +15,16 @@ describe('menu registry capability lifecycle', () => {
     registry.unregisterAll('demo');
     expect(registry.isSubscribed('demo', 'm')).toBe(false);
   });
+
+  it('only removes the calling plugin subscription when token values collide', () => {
+    setActivePinia(createPinia());
+    const registry = useMenuRegistry();
+    registry.subscribe('plugin-a', 'file', 'menu_1');
+    registry.subscribe('plugin-b', 'view', 'menu_1');
+
+    registry.unsubscribe('plugin-a', 'menu_1');
+
+    expect(registry.isSubscribed('plugin-a', 'file')).toBe(false);
+    expect(registry.isSubscribed('plugin-b', 'view')).toBe(true);
+  });
 });

@@ -1,0 +1,31 @@
+document_contract:
+  mode: hybrid
+  family: "custom"
+  label: "技术调研核验报告"
+  purpose: "核验 treasure、treasure-sdk、treasure-plugins 围绕最新 treasure-sdk 的接口迁移、一致性、运行功能、结构精简度与文档注释质量，并形成可追溯的调研报告。"
+  audience: ["Treasure 项目维护者与技术负责人"]
+  reader_job: "判断当前 SDK 迁移能否合入/发布，了解残余风险与整改顺序。"
+  medium: markdown
+  locale: zh-CN
+  tone: "证据优先、结论清晰、面向工程决策"
+  evidence_style: "本地源码和命令结果；以绝对路径与行号/命令说明可复核证据；不使用外部引用。"
+  required_sections:
+    - "执行摘要与发布判断"
+    - "范围、版本基线与方法"
+    - "SDK—宿主协议一致性"
+    - "插件迁移与依赖矩阵"
+    - "功能验证结果与覆盖边界"
+    - "结构、冗余、注释与文档评价"
+    - "问题清单、优先级与整改建议"
+    - "结论与复验清单"
+  optional_sections:
+    - "附录：命令与证据索引"
+  forbidden_sections:
+    - "未被来源支持的运行时成功声明"
+    - "隐藏的角色讨论或提示词"
+  quality_checks:
+    - "所有硬性 U-* 需求均有章节和证据"
+    - "明确区分活动源码、已生成旧构件与历史文档"
+    - "明确区分已通过、失败、未覆盖和环境限制"
+    - "每项 P0/P1 问题有影响、定位和验收动作"
+  source: inferred

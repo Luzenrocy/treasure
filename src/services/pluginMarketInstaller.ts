@@ -16,6 +16,7 @@ import { execute } from '@/sql/common';
 import { findPluginPackageRoot } from '@/components/pluginManager/packageImport';
 import { useMenuStore } from '@/store/menu';
 import { useTabsStore } from '@/store/tabs';
+import { assertMinimumPlatformVersion, isMinimumPlatformVersionSatisfied, PlatformVersionError } from '@/utils/platformVersion';
 
 export interface InstallProgress {
   phase: 'downloading' | 'hashing' | 'extracting' | 'validating' | 'importing' | 'succeeded' | 'failed' | 'cancelled';
@@ -33,16 +34,20 @@ export interface PluginInstallOptions {
 export const DEFAULT_ALLOWED_DOWNLOAD_HOSTS = [
   'github.com',
   'objects.githubusercontent.com',
+  'gitee.com',
   'huggingface.co',
   'huggingface.com',
 ];
 export const DEFAULT_MAX_SIZE_BYTES = 512 * 1024 * 1024;
+const MODELSCOPE_BROWSER_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 /**
  * Download, verify and install (or upgrade) a plugin from a marketplace release.
  * Reuses the host's existing import pipeline (upgradePlugin / fresh insert).
  */
 export async function installPluginFromMarket(release: MarketRelease, options: PluginInstallOptions = {}): Promise<void> {
+  // This is a server-side guard for callers that bypass the market UI.
+  const platformVersion = await assertMinimumPlatformVersion(release.minPlatformVersion);
   const allowed = options.allowedHosts ?? DEFAULT_ALLOWED_DOWNLOAD_HOSTS;
   const maxBytes = options.maxSizeBytes ?? DEFAULT_MAX_SIZE_BYTES;
   const emit = (progress: InstallProgress) => options.onProgress?.(progress);
@@ -61,7 +66,12 @@ export async function installPluginFromMarket(release: MarketRelease, options: P
   }
   let response: Response;
   try {
-    response = await fetch(url.toString(), { signal: controller.signal, redirect: 'follow' });
+    response = await fetch(url.toString(), {
+      signal: controller.signal,
+      redirect: 'follow',
+      // ModelScope's edge gateway rejects the native HTTP client's default UA.
+      headers: { Accept: 'application/octet-stream', 'User-Agent': MODELSCOPE_BROWSER_USER_AGENT },
+    });
   } catch (e) {
     if (controller.signal.aborted) { emit({ phase: 'cancelled', progress: 0 }); return; }
     throw new Error(`下载插件包失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -92,17 +102,17 @@ export async function installPluginFromMarket(release: MarketRelease, options: P
   const zipPath = `${tmpRoot}/package.zip`;
   const extractDir = `${tmpRoot}/extracted`;
   await mkdir(tmpRoot, { recursive: true });
-  await writeBinaryFile(zipPath, bytes);
-  emit({ phase: 'extracting', progress: 55, message: '正在解压插件包' });
   try {
-    await invoke('extract_zip', { zipPath, targetDir: extractDir });
-  } catch (e) {
-    await cleanupTmp(tmpRoot);
-    throw new Error(`解压失败: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  if (isCancelled()) { emit({ phase: 'cancelled', progress: 0 }); return; }
+    // package.zip 落盘后，任何失败、取消或安装异常都必须删除整个临时目录。
+    await writeBinaryFile(zipPath, bytes);
+    emit({ phase: 'extracting', progress: 55, message: '正在解压插件包' });
+    try {
+      await invoke('extract_zip', { zipPath, targetDir: extractDir });
+    } catch (e) {
+      throw new Error(`解压失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (isCancelled()) { emit({ phase: 'cancelled', progress: 0 }); return; }
 
-  try {
     // 5. find package root
     const root = await findPluginPackageRoot(extractDir, { exists, readDir });
     if (!root.ok) throw new Error(root.error);
@@ -117,6 +127,15 @@ export async function installPluginFromMarket(release: MarketRelease, options: P
     if (!check.valid) throw new Error(`manifest 校验失败: ${check.errors.join('; ')}`);
     if (manifest.name !== release.pluginCode) throw new Error(`manifest.name(${manifest.name}) 与市场编码(${release.pluginCode})不一致`);
     if (manifest.version !== release.version) throw new Error(`manifest.version(${manifest.version}) 与市场版本(${release.version})不一致`);
+    if (manifest.minPlatformVersion && release.minPlatformVersion && manifest.minPlatformVersion !== release.minPlatformVersion) {
+      throw new Error('市场发布信息与插件包的最低平台版本不一致');
+    }
+    const requiredVersion = manifest.minPlatformVersion ?? release.minPlatformVersion;
+    if (!isMinimumPlatformVersionSatisfied(requiredVersion, platformVersion)) {
+      // The running application cannot change version during installation, but retain a
+      // post-extraction guard so that metadata cannot be used to bypass package policy.
+      throw new PlatformVersionError(`此插件需要 Treasure ${requiredVersion} 或更高版本。当前版本：${platformVersion}。`);
+    }
     if (isCancelled()) { emit({ phase: 'cancelled', progress: 0 }); return; }
 
     // 7. import via existing pipeline

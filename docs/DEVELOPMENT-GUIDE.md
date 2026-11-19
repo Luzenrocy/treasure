@@ -63,7 +63,7 @@ npm run tauri -- dev
 
 ### 4.3 SDK 与桥接能力扩展
 
-先定义插件真正需要的最小原子能力，再同时修改宿主、SDK、协议和插件用例。operation 名使用 `<capability>.<verb>`；请求身份不能来自 payload。所有外部输入都要有结构校验、授权校验和大小/数量上限。
+先定义插件真正需要的最小原子能力，再同时修改宿主、SDK、协议和插件用例。operation 名使用 `<capability>.<verb>`；请求身份不能来自 payload。`1.0.0` 基线的请求消息信封按能力域拆分：新增能力域必须在宿主 `pluginBridge.ts` 的 `REQUEST_TYPE_BY_CAPABILITY` 与 SDK 的 `production.ts` 同步注册 `treasure-{domain}-request`，并保持两端映射一致（`pluginBridge.test.ts` 有契约测试校验）。所有外部输入都要有结构校验、授权校验和大小/数量上限。
 
 ### 4.4 插件安装与数据迁移
 

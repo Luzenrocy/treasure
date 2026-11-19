@@ -19,6 +19,13 @@ describe('pluginMarketInstaller helpers', () => {
     expect(host).toBe('cdn.example.com');
   });
 
+  it('respects a custom download host allow-list', () => {
+    expect(() =>
+      allowedDownloadUrl('https://github.com/owner/repo/releases/download/v1/plugin.zip', ['market.example.com']),
+    ).toThrow(/允许的下载域名/);
+    expect(allowedDownloadUrl('https://market.example.com/api/plugins/demo/releases/1.0.0/download', ['market.example.com']).hostname).toBe('market.example.com');
+  });
+
   it('parses quoted Content-Disposition filenames', () => {
     expect(parseContentDisposition('attachment; filename="plugin-1.0.0.zip"')).toBe('plugin-1.0.0.zip');
   });
