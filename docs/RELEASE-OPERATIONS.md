@@ -34,7 +34,7 @@ workflow file, `.npmrc`, git remote URL, or commit.
 | all three | `GITEE_TOKEN` secret | Gitee personal access token that can create Releases and upload their attachments in its matching repository. |
 | all three | `GITEE_OWNER` variable | Optional; omit because the repositories are all owned by `Luzenrocy`. |
 | all three | `GITEE_REPO` variable | Optional; omit because the Gitee and GitHub repository names match. |
-| `treasure-sdk` | `GH_PACKAGES_TOKEN` secret | A classic GitHub PAT with package administration and `write:packages`; used only to make the first `@luzenrocy/treasure-sdk` package public. |
+| `treasure-sdk` | no package-visibility secret | Set `@luzenrocy/treasure-sdk` to Public in GitHub package settings after its first successful publication. GitHub Packages does not provide a supported visibility-update REST endpoint for this workflow. |
 | `treasure-sdk` | `NPM_TOKEN` Environment secret in `npm` | An npm token authorized to deprecate the legacy unscoped `treasure-sdk` versions in the later npmjs-stop workflow. |
 | phase 5 operator credential | `GHCR_CLEANUP_TOKEN` | A separate classic GitHub PAT with `read:packages` and `delete:packages`, used only while deleting historical GHCR package versions. Do not add it to the release workflows. |
 
