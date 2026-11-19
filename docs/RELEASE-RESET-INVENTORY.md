@@ -83,3 +83,23 @@ Immediately before deletion, rerun `scripts/list-ghcr-inventory.sh` from the
 `treasure-plugins` repository and compare its IDs with these snapshots. Any
 new or changed record must be separately reviewed; it is not implicitly in the
 approved deletion set.
+
+## Cleanup execution status
+
+The historical GitHub tags and Releases have been deleted. A final read-only
+check confirmed zero remote tags in all three GitHub repositories, and zero
+tags and zero Releases in all three Gitee repositories after the Pull mirrors
+were resumed and updated.
+
+GHCR deletion removed, or found already absent, 112 of the 114 reviewed
+version records. GitHub rejected these two public, untagged historical versions
+because its backend reports more than 5,000 downloads; GitHub Support must
+delete them:
+
+| Image | Version ID | Digest |
+| --- | ---: | --- |
+| `treasure-plugin-market` | `1327982142` | `sha256:26261d93e6387e4accf6a793a9aafc36d9abc0284f0a8460905ceff893716d76` |
+| `treasure-plugin-icons` | `1360713967` | `sha256:c7cbf8cdb246313707226a4eadad2c9d6d0529a6a418538af38e046df2304ada` |
+
+No replacement image or tag may be published until GitHub Support confirms the
+two deletions and a new authenticated GHCR inventory is empty.
