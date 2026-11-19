@@ -101,5 +101,6 @@ delete them:
 | `treasure-plugin-market` | `1327982142` | `sha256:26261d93e6387e4accf6a793a9aafc36d9abc0284f0a8460905ceff893716d76` |
 | `treasure-plugin-icons` | `1360713967` | `sha256:c7cbf8cdb246313707226a4eadad2c9d6d0529a6a418538af38e046df2304ada` |
 
-No replacement image or tag may be published until GitHub Support confirms the
-two deletions and a new authenticated GHCR inventory is empty.
+By owner decision, the new 1.0.0 release may proceed before GitHub Support
+confirms the two deletions. The two protected historical versions remain an
+open post-release cleanup item and must be rechecked after the new release.
