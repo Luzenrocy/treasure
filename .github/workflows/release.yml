@@ -119,15 +119,15 @@ jobs:
           # safe by checking the remote attachment list before each upload.
           curl_gitee() {
             local attempt
-            for attempt in $(seq 1 5); do
+            for attempt in $(seq 1 3); do
               if curl --fail-with-body --silent --show-error \
-                --connect-timeout 30 --max-time 900 "$@"; then
+                --connect-timeout 30 --max-time 45 "$@"; then
                 return 0
               fi
-              if [ "$attempt" = "5" ]; then
+              if [ "$attempt" = "3" ]; then
                 return 1
               fi
-              echo "Gitee request failed; retrying (${attempt}/5) in $((attempt * 5)) seconds..." >&2
+              echo "Gitee request failed; retrying (${attempt}/3) in $((attempt * 5)) seconds..." >&2
               sleep $((attempt * 5))
             done
           }
@@ -137,14 +137,14 @@ jobs:
           # look up and reuse the existing release; only retry transport errors.
           curl_gitee_allow_http_error() {
             local attempt
-            for attempt in $(seq 1 5); do
-              if curl --silent --show-error --connect-timeout 30 --max-time 900 "$@"; then
+            for attempt in $(seq 1 3); do
+              if curl --silent --show-error --connect-timeout 30 --max-time 45 "$@"; then
                 return 0
               fi
-              if [ "$attempt" = "5" ]; then
+              if [ "$attempt" = "3" ]; then
                 return 1
               fi
-              echo "Gitee transport request failed; retrying (${attempt}/5) in $((attempt * 5)) seconds..." >&2
+              echo "Gitee transport request failed; retrying (${attempt}/3) in $((attempt * 5)) seconds..." >&2
               sleep $((attempt * 5))
             done
           }
@@ -187,16 +187,45 @@ jobs:
 
           for asset in release-assets/*; do
             asset_name=$(basename "$asset")
-            attachments=$(curl_gitee \
-              "${api}/releases/${release_id}/attach_files?access_token=${GITEE_TOKEN}")
-            if jq -e --arg name "$asset_name" '.[] | select(.name == $name)' \
-              <<<"$attachments" >/dev/null; then
+            if jq -e --arg name "$asset_name" '.assets[]? | select(.name == $name)' \
+              <<<"$payload" >/dev/null; then
               echo "Gitee asset already exists; skipping: ${asset_name}"
               continue
             fi
 
-            curl_gitee --request POST --form "file=@${asset}" \
-              "${api}/releases/${release_id}/attach_files?access_token=${GITEE_TOKEN}"
+            uploaded=false
+            for attempt in $(seq 1 3); do
+              if curl --fail-with-body --silent --show-error \
+                --connect-timeout 30 --max-time 180 --request POST --form "file=@${asset}" \
+                "${api}/releases/${release_id}/attach_files?access_token=${GITEE_TOKEN}"; then
+                uploaded=true
+                break
+              fi
+
+              # The server can accept an upload and close the connection before
+              # returning a response.  Refresh by tag before retrying so that
+              # case never creates a duplicate attachment.
+              payload=$(curl_gitee \
+                "${api}/releases/tags/${RELEASE_TAG}?access_token=${GITEE_TOKEN}")
+              if jq -e --arg name "$asset_name" '.assets[]? | select(.name == $name)' \
+                <<<"$payload" >/dev/null; then
+                echo "Gitee accepted the asset before disconnecting: ${asset_name}"
+                uploaded=true
+                break
+              fi
+
+              if [ "$attempt" != "3" ]; then
+                echo "Gitee upload failed; retrying (${attempt}/3) in $((attempt * 5)) seconds..." >&2
+                sleep $((attempt * 5))
+              fi
+            done
+            if [ "$uploaded" != "true" ]; then
+              echo "Gitee upload failed after 3 attempts: ${asset_name}" >&2
+              exit 1
+            fi
+
+            payload=$(curl_gitee \
+              "${api}/releases/tags/${RELEASE_TAG}?access_token=${GITEE_TOKEN}")
           done
 
       - name: Publish GitHub release
