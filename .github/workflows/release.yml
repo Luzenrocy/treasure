@@ -132,6 +132,23 @@ jobs:
             done
           }
 
+          # Creating a release for an existing tag intentionally returns HTTP
+          # 400 from Gitee.  Preserve that response so the fallback below can
+          # look up and reuse the existing release; only retry transport errors.
+          curl_gitee_allow_http_error() {
+            local attempt
+            for attempt in $(seq 1 5); do
+              if curl --silent --show-error --connect-timeout 30 --max-time 900 "$@"; then
+                return 0
+              fi
+              if [ "$attempt" = "5" ]; then
+                return 1
+              fi
+              echo "Gitee transport request failed; retrying (${attempt}/5) in $((attempt * 5)) seconds..." >&2
+              sleep $((attempt * 5))
+            done
+          }
+
           # Gitee receives source commits and tags through its GitHub pull mirror.
           # A Release cannot target a commit that the mirror has not received yet.
           for attempt in $(seq 1 90); do
@@ -155,7 +172,7 @@ jobs:
             exit 1
           fi
 
-          payload=$(curl_gitee --request POST \
+          payload=$(curl_gitee_allow_http_error --request POST \
             --data-urlencode "tag_name=${RELEASE_TAG}" \
             --data-urlencode "name=Treasure ${RELEASE_TAG}" \
             --data-urlencode "body=Mirrored from https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
