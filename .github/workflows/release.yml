@@ -22,8 +22,48 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  prepare-release:
     if: ${{ github.ref_type == 'tag' && !inputs.resume_tag }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Create or reuse the GitHub release draft
+        id: draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(jq -er '.version | strings' src-tauri/tauri.conf.json)
+          if [[ $RELEASE_TAG != "v$version" ]]; then
+            echo "Tag $RELEASE_TAG does not match the application version v$version." >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --silent
+          api="repos/$GITHUB_REPOSITORY/releases"
+          draft=$(gh api --paginate --slurp "$api?per_page=100" |
+            jq -ce --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] |
+              if length > 1 then error("Multiple releases use the same tag") else .[0] end |
+              {id,draft,tag_name}')
+          if [[ $(jq -r '.id // empty' <<<"$draft") == "" ]]; then
+            # The tag already exists. Leave target_commitish unset so GitHub
+            # uses the tag without requesting extra permissions for that commit.
+            draft=$(gh api --method POST "$api" -f "tag_name=$RELEASE_TAG" \
+              -f "name=Treasure $RELEASE_TAG" \
+              -f 'body=Download an installer below, or use the Windows x64 portable ZIP without installation.' \
+              -F draft=true)
+          fi
+          release_id=$(jq -er --arg tag "$RELEASE_TAG" \
+            'select(.tag_name == $tag and .draft == true) | .id | numbers' <<<"$draft")
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: prepare-release
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.platform }}
     strategy:
@@ -59,17 +99,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and create release
+      - name: Build and upload release assets
         id: tauri
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v__VERSION__
-          releaseName: Treasure v__VERSION__
-          releaseBody: Download an installer below, or use the Windows x64 portable ZIP without installation.
-          releaseDraft: true
-          prerelease: false
+          tagName: ${{ github.ref_name }}
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
       - name: Package Windows portable build
