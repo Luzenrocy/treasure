@@ -35,7 +35,8 @@ for attempt in {1..45}; do
 done
 
 lookup_status=$(read_api --output "$response" --write-out '%{http_code}' "$release_lookup")
-if [[ $lookup_status == 404 ]]; then
+if [[ $lookup_status == 404 ]] ||
+   { [[ $lookup_status == 200 ]] && jq -e 'type == "null"' "$response" >/dev/null; }; then
   # The lookup after creation also handles a response lost after the POST.
   curl "${curl_options[@]}" --max-time 45 --fail --output "$response" \
     --data-urlencode "access_token=${GITEE_TOKEN}" \
