@@ -67,7 +67,8 @@ attachment_id() {
 }
 
 remote_digest() {
-  curl "${curl_options[@]}" --max-time 180 --fail --location --proto-redir '=https' \
+  curl "${curl_options[@]}" --max-time 900 --speed-limit 1024 --speed-time 180 \
+    --fail --location --proto-redir '=https' \
     "${attachment_api}/$1/download?access_token=${GITEE_TOKEN}" |
     sha256sum | cut -d ' ' -f 1
 }
@@ -75,10 +76,13 @@ remote_digest() {
 upload_asset() {
   local asset=$1 expected_digest=$2 name=${1##*/}
   local attempt result curl_status status uploaded seconds id digest
-  for attempt in {1..3}; do
-    echo "Uploading to Gitee: ${name} (attempt ${attempt}/3)"
+  for attempt in {1..2}; do
+    echo "Uploading to Gitee: ${name} (attempt ${attempt}/2)"
     curl_status=0
-    result=$(curl "${curl_options[@]}" --http1.1 --header 'Expect:' --max-time 180 \
+    # The hosted runner previously needed over 3 minutes just to send 4 MB.
+    # Let slow transfers finish and abort connections that stop making progress.
+    result=$(curl "${curl_options[@]}" --http1.1 --header 'Expect:' \
+      --max-time 9000 --speed-limit 1024 --speed-time 180 \
       --output "$response" --write-out '%{http_code} %{size_upload} %{time_total}' \
       --form-string "access_token=${GITEE_TOKEN}" --form "file=@${asset}" "$attachment_api") ||
       curl_status=$?
@@ -97,14 +101,18 @@ upload_asset() {
       echo "Gitee returned a different SHA-256 after uploading ${name} (attachment ${id})." >&2
       return 1
     fi
+    if [[ $status == 2?? ]]; then
+      echo "Gitee accepted ${name} but has not listed it yet. Let the next sync verify it." >&2
+      return 1
+    fi
     if [[ $status == 4?? && $status != 408 && $status != 429 ]]; then
       return 1
     fi
-    if [[ $attempt != 3 ]]; then
-      sleep "$((attempt * 5))"
+    if [[ $attempt == 1 ]]; then
+      sleep 10
     fi
   done
-  echo "Gitee upload failed after 3 attempts: ${name}" >&2
+  echo "Gitee upload failed after 2 attempts: ${name}" >&2
   return 1
 }
 

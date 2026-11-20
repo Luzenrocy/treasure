@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       resume_tag:
-        description: Reuse an existing draft and run only the release finalization (select main)
+        description: Publish an existing draft without rebuilding (select main)
         type: string
       replace_mismatched:
-        description: Replace Gitee attachments whose SHA-256 differs from the GitHub draft
+        description: Replace Gitee attachments whose SHA-256 differs from the GitHub release
         type: boolean
         default: false
 
@@ -100,8 +100,8 @@ jobs:
         run: gh release upload "$env:RELEASE_TAG" "$env:PORTABLE_ARCHIVE" --clobber
 
   finalize-release:
-    # Each matrix entry appends to the same draft release.  Only this job makes it
-    # public, after the complete asset set has also been copied to Gitee.
+    # Each matrix entry appends to this draft. Publish it after generating the
+    # checksums so the Gitee job can always use the published assets as its source.
     needs: release
     if: ${{ !cancelled() && (needs.release.result == 'success' || inputs.resume_tag) }}
     runs-on: ubuntu-latest
@@ -136,10 +136,6 @@ jobs:
         run: |
           set -euo pipefail
           cd release-assets
-          if find . -maxdepth 1 -type f -size +100M -print -quit | grep -q .; then
-            echo "A release asset exceeds Gitee's 100 MB attachment limit." >&2
-            exit 1
-          fi
           manifest=$(mktemp)
           trap 'rm -f "$manifest"' EXIT
           shopt -s nullglob
@@ -162,13 +158,17 @@ jobs:
             gh release upload "$RELEASE_TAG" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
           fi
 
-      - name: Mirror release assets to Gitee
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER || github.repository_owner }}
-          GITEE_REPO: ${{ vars.GITEE_REPO || github.event.repository.name }}
-          REPLACE_MISMATCHED: ${{ inputs.replace_mismatched }}
-        run: bash scripts/mirror-gitee-release.sh release-assets
-
       - name: Publish GitHub release
         run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  mirror-gitee:
+    needs: finalize-release
+    if: ${{ !cancelled() && needs.finalize-release.result == 'success' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mirror-gitee.yml
+    with:
+      release_tag: ${{ inputs.resume_tag || github.ref_name }}
+      replace_mismatched: ${{ inputs.replace_mismatched == true }}
+    secrets:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}

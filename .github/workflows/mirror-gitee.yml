@@ -1,0 +1,96 @@
+name: Sync desktop releases to Gitee
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      replace_mismatched:
+        type: boolean
+        default: false
+    secrets:
+      GITEE_TOKEN:
+        required: true
+  schedule:
+    - cron: "23 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published GitHub tag to sync, or leave blank to find pending releases
+        type: string
+      replace_mismatched:
+        description: Replace attachments with different SHA-256 (requires an explicit release tag)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GITEE_OWNER: ${{ vars.GITEE_OWNER || github.repository_owner }}
+  GITEE_REPO: ${{ vars.GITEE_REPO || github.event.repository.name }}
+
+jobs:
+  select-releases:
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.select.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select releases to sync
+        id: select
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          REPLACE_MISMATCHED: ${{ inputs.replace_mismatched }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: bash scripts/select-gitee-releases.sh
+
+  sync:
+    needs: select-releases
+    if: ${{ needs.select-releases.outputs.tags != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.select-releases.outputs.tags) }}
+    concurrency:
+      group: gitee-desktop-release-${{ matrix.tag }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      RELEASE_TAG: ${{ matrix.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download and verify the published GitHub assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ $RELEASE_TAG != v* ]] || ! git check-ref-format "refs/tags/$RELEASE_TAG"; then
+            echo "Select a valid version tag beginning with v." >&2
+            exit 1
+          fi
+          if [[ $(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft) != false ]]; then
+            echo "GitHub release $RELEASE_TAG must be published before mirroring." >&2
+            exit 1
+          fi
+          git fetch --no-tags --depth 1 origin "refs/tags/$RELEASE_TAG"
+          echo "RELEASE_SHA=$(git rev-parse 'FETCH_HEAD^{commit}')" >> "$GITHUB_ENV"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
+          cd release-assets
+          if find . -maxdepth 1 -type f -size +100M -print -quit | grep -q .; then
+            echo "A release asset exceeds Gitee's 100 MB attachment limit." >&2
+            exit 1
+          fi
+          # Require a nonempty manifest covering exactly the downloadable assets.
+          diff -u <(LC_ALL=C sort SHA256SUMS.txt) \
+                  <(find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%f\0' |
+                    xargs -0 -r sha256sum -- | LC_ALL=C sort)
+          test -s SHA256SUMS.txt
+
+      - name: Sync and verify Gitee attachments
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          REPLACE_MISMATCHED: ${{ inputs.release_tag != '' && inputs.replace_mismatched == true }}
+        run: bash scripts/mirror-gitee-release.sh release-assets
