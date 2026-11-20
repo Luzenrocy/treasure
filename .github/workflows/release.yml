@@ -114,6 +114,24 @@ jobs:
           : "${GITEE_TOKEN:?Set the GITEE_TOKEN repository secret before releasing.}"
           api="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}"
 
+          # Gitee intermittently closes long-lived TLS connections during asset
+          # uploads.  Retry transient transport failures, while making retries
+          # safe by checking the remote attachment list before each upload.
+          curl_gitee() {
+            local attempt
+            for attempt in $(seq 1 5); do
+              if curl --fail-with-body --silent --show-error \
+                --connect-timeout 30 --max-time 900 "$@"; then
+                return 0
+              fi
+              if [ "$attempt" = "5" ]; then
+                return 1
+              fi
+              echo "Gitee request failed; retrying (${attempt}/5) in $((attempt * 5)) seconds..." >&2
+              sleep $((attempt * 5))
+            done
+          }
+
           # Gitee receives source commits and tags through its GitHub pull mirror.
           # A Release cannot target a commit that the mirror has not received yet.
           for attempt in $(seq 1 90); do
@@ -137,7 +155,7 @@ jobs:
             exit 1
           fi
 
-          payload=$(curl --silent --show-error --request POST \
+          payload=$(curl_gitee --request POST \
             --data-urlencode "tag_name=${RELEASE_TAG}" \
             --data-urlencode "name=Treasure ${RELEASE_TAG}" \
             --data-urlencode "body=Mirrored from https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
@@ -145,14 +163,22 @@ jobs:
             "${api}/releases?access_token=${GITEE_TOKEN}")
           release_id=$(jq -er '.id // empty' <<<"$payload" || true)
           if [ -z "$release_id" ]; then
-            payload=$(curl --fail-with-body --silent --show-error \
+            payload=$(curl_gitee \
               "${api}/releases/tags/${RELEASE_TAG}?access_token=${GITEE_TOKEN}")
             release_id=$(jq -er '.id' <<<"$payload")
           fi
 
           for asset in release-assets/*; do
-            curl --fail-with-body --silent --show-error --request POST \
-              --form "file=@${asset}" \
+            asset_name=$(basename "$asset")
+            attachments=$(curl_gitee \
+              "${api}/releases/${release_id}/attach_files?access_token=${GITEE_TOKEN}")
+            if jq -e --arg name "$asset_name" '.[] | select(.name == $name)' \
+              <<<"$attachments" >/dev/null; then
+              echo "Gitee asset already exists; skipping: ${asset_name}"
+              continue
+            fi
+
+            curl_gitee --request POST --form "file=@${asset}" \
               "${api}/releases/${release_id}/attach_files?access_token=${GITEE_TOKEN}"
           done
 
