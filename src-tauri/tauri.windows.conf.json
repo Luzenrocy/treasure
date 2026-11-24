@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "treasure",
+        "width": 1024,
+        "height": 768,
+        "decorations": false,
+        "transparent": false
+      }
+    ]
+  }
+}

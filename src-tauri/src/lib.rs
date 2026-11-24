@@ -15,6 +15,8 @@ mod db;
 use db::Database;
 mod logging;
 use logging::LogEngine;
+#[cfg(windows)]
+mod windows_titlebar;
 
 fn extract_table_names_recursive(stmt: &Statement) -> HashSet<String> {
     let mut tables = HashSet::new();
@@ -452,6 +454,26 @@ fn close_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn minimize_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.minimize().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn toggle_maximize_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.is_maximized().map_err(|error| error.to_string())? {
+        window.unmaximize().map_err(|error| error.to_string())
+    } else {
+        window.maximize().map_err(|error| error.to_string())
+    }
+}
+
+#[tauri::command]
+fn toggle_fullscreen_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    let fullscreen = window.is_fullscreen().map_err(|error| error.to_string())?;
+    window.set_fullscreen(!fullscreen).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_traffic_lights_visible(window: tauri::WebviewWindow, visible: bool) -> Result<(), String> {
     set_traffic_lights_hidden_internal(&window, !visible)
 }
@@ -527,6 +549,11 @@ pub fn run() {
             app.manage(log_engine);
             
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(windows)]
+                if let Err(error) = windows_titlebar::install(&window) {
+                    warn!(%error, "Unable to install the Windows title-bar subclass");
+                }
+
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Destroyed = event {
@@ -543,6 +570,9 @@ pub fn run() {
             copy_directory,
             extract_zip,
             close_window,
+            minimize_window,
+            toggle_maximize_window,
+            toggle_fullscreen_window,
             set_traffic_lights_visible,
             verify_sql,
             prepare_plugin_sql,

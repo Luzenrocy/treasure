@@ -10,6 +10,7 @@ export interface MenuItemDef {
   label: string;
   type: 'normal' | 'check' | 'separator';
   checked?: boolean;
+  enabled?: boolean;
   accelerator?: string;
 }
 
@@ -144,16 +145,21 @@ export const useMenuRegistry = defineStore('menuRegistry', {
       }
     },
 
-    /** 同步更新注册表中的勾选状态，确保菜单重建时使用最新状态 */
+    /** 同步更新注册表中的勾选状态，确保原生与自绘菜单都立即反映最新值 */
     updateRegistrationChecked(pluginCode: string, menuId: string, itemId: string, checked: boolean) {
       const list = this.registrations.get(pluginCode);
       if (!list) return;
+      let changed = false;
       for (const reg of list) {
         if (reg.menuId !== menuId) continue;
         for (const item of reg.items) {
-          if (item.id === itemId) item.checked = checked;
+          if (item.id === itemId && item.checked !== checked) {
+            item.checked = checked;
+            changed = true;
+          }
         }
       }
+      if (changed) this.menuVersion++;
     },
   },
 });

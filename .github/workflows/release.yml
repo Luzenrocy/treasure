@@ -39,9 +39,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(jq -er '.version | strings' src-tauri/tauri.conf.json)
-          if [[ $RELEASE_TAG != "v$version" ]]; then
-            echo "Tag $RELEASE_TAG does not match the application version v$version." >&2
+          if [[ $RELEASE_TAG != v* ]] || ! git check-ref-format "refs/tags/$RELEASE_TAG"; then
+            echo "Release tag must begin with v and be a valid Git tag: $RELEASE_TAG" >&2
             exit 1
           fi
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --silent
@@ -114,20 +113,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = '${{ steps.tauri.outputs.appVersion }}'
-          if ([string]::IsNullOrWhiteSpace($version)) {
-            throw 'Tauri action did not report an application version.'
+          $releaseTag = '${{ github.ref_name }}'
+          if ([string]::IsNullOrWhiteSpace($releaseTag) -or -not $releaseTag.StartsWith('v')) {
+            throw "Expected a version tag, received '$releaseTag'."
           }
+          $releaseVersion = $releaseTag.Substring(1)
 
           $binary = 'src-tauri/target/release/treasure.exe'
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "Portable executable was not found at $binary"
           }
 
-          $archive = "Treasure_${version}_windows-x64_portable.zip"
+          $archive = "Treasure_${releaseVersion}_windows-x64_portable.zip"
           Compress-Archive -LiteralPath $binary -DestinationPath $archive -CompressionLevel Optimal
           "PORTABLE_ARCHIVE=$archive" >> $env:GITHUB_ENV
-          "RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+          "RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
 
       - name: Upload Windows portable build
         if: runner.os == 'Windows'

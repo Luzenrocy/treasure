@@ -1,22 +1,28 @@
 <script lang="ts">
 import {defineComponent} from "vue";
+import { ElMessage } from 'element-plus';
 import menuItem from "@/components/frame/menuItem/index.vue"
 import PluginView from "@/components/plugin/index.vue"
 import DiamondIcon from "@/assets/diamond.svg?component"
+import WindowsTitleBar from './WindowsTitleBar.vue';
 import {useMenuStore} from "@/store/menu";
 import {useTabsStore} from "@/store/tabs";
 import {useMenuRegistry} from "@/store/menuRegistry";
-import {MENU_LABEL_ALIASES, findSubmenuRecursive, removeMenuItem, moveItemToEnd, mountPluginMenus} from "@/bridge/pluginBridge";
+import {MENU_LABEL_ALIASES, dispatchMenuEvent, findSubmenuRecursive, removeMenuItem, moveItemToEnd, mountPluginMenus} from "@/bridge/pluginBridge";
 import {MenuItem} from '@/class';
 import {getCurrentWindow} from '@tauri-apps/api/window';
 import {invoke} from '@tauri-apps/api/core';
 import {Menu, Submenu, MenuItem as TauriMenuItem, CheckMenuItem, PredefinedMenuItem, type SubmenuOptions} from '@tauri-apps/api/menu';
 import { logEvent } from '@/utils/logger';
 import type {RouteLocationNormalizedLoaded} from 'vue-router';
+import {
+  buildApplicationMenu,
+  type ApplicationMenuAction,
+} from './applicationMenu';
 
 export default defineComponent({
   name: 'frame',
-  components: {menuItem, PluginView, DiamondIcon},
+  components: {menuItem, PluginView, DiamondIcon, WindowsTitleBar},
   data() {
     return {
       isCollapse: false,
@@ -25,6 +31,7 @@ export default defineComponent({
       tabsStore: useTabsStore(),
       menuRegistry: useMenuRegistry(),
       menuRebuildTimer: null as number | null,
+      isWindows: navigator.userAgent.includes('Windows'),
     }
   },
   methods: {
@@ -44,6 +51,7 @@ export default defineComponent({
       }
     },
     onHeaderMouseDown(e: MouseEvent) {
+      if (this.isWindows) return;
       const target = e.target as HTMLElement
       if (target.closest('.el-tabs__item')) { return }
       if (e.button !== 0) { return }
@@ -70,6 +78,9 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
       )
     },
     async rebuildMenu() {
+      // Windows draws this model in the custom title bar. Do not attach a native
+      // menu there, otherwise Windows reserves a second menu row below it.
+      if (this.isWindows) return;
       try {
         const activeCode = this.tabsStore.activePluginCode;
         const regs = activeCode ? this.menuRegistry.getActiveRegistrations() : [];
@@ -128,8 +139,65 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
       try {
         const isMac = navigator.userAgent.includes('Mac');
         if (isMac) await menu.setAsAppMenu();
-        else await menu.setAsWindowMenu();
+        else if (!this.isWindows) await menu.setAsWindowMenu();
       } catch (e) { console.warn('Failed to apply native menu:', e); }
+    },
+    async handleWindowsMenuAction(action: ApplicationMenuAction) {
+      if (action.target === 'plugin') {
+        if (action.checkable && typeof action.checked === 'boolean') {
+          this.menuRegistry.updateRegistrationChecked(
+            action.pluginCode,
+            action.menuId,
+            action.itemId,
+            action.checked,
+          );
+          await this.menuRegistry.updateState(
+            action.pluginCode,
+            action.menuId,
+            action.itemId,
+            action.checked,
+          );
+        }
+        dispatchMenuEvent(action.pluginCode, action.menuId, action.itemId);
+        return;
+      }
+
+      switch (action.command) {
+        case 'closeCurrentTab':
+          this.removeTab(this.tabsStore.activeTab);
+          break;
+        case 'closeAllTabs':
+          this.closeAllPluginTabs();
+          break;
+        case 'closeWindow':
+          await invoke('close_window');
+          break;
+        case 'minimize':
+          await invoke('minimize_window');
+          break;
+        case 'toggleMaximize':
+          await invoke('toggle_maximize_window');
+          break;
+        case 'toggleFullscreen':
+          await invoke('toggle_fullscreen_window');
+          break;
+        case 'about':
+          ElMessage.info('Treasure v1.0.0');
+          break;
+        default:
+          this.executeEditCommand(action.command);
+      }
+    },
+    executeEditCommand(command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll') {
+      const editorCommand: Record<typeof command, string> = {
+        undo: 'undo',
+        redo: 'redo',
+        cut: 'cut',
+        copy: 'copy',
+        paste: 'paste',
+        selectAll: 'selectAll',
+      };
+      document.execCommand(editorCommand[command]);
     },
     onPluginTabRemoved(path: string) {
       const removedTab = this.tabsStore.tabs.find(t => t.path === path);
@@ -163,6 +231,10 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
     },
     menuScrollbarHeight(): string {
       return this.pluginManagerVisible ? 'calc(100% - 40px - 56px * 2)' : 'calc(100% - 40px - 56px)'
+    },
+    windowsApplicationMenu() {
+      const activeCode = this.tabsStore.activePluginCode;
+      return buildApplicationMenu(activeCode, activeCode ? this.menuRegistry.getActiveRegistrations() : []);
     }
   },
   async mounted() {
@@ -213,7 +285,16 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
 </script>
 
 <template>
-  <el-container class="main-container">
+  <div class="main-container" :class="{ 'is-windows': isWindows }">
+    <WindowsTitleBar
+      v-if="isWindows"
+      :menu-groups="windowsApplicationMenu"
+      @menu-action="handleWindowsMenuAction"
+      @minimize="handleWindowsMenuAction({ target: 'host', command: 'minimize' })"
+      @toggle-maximize="handleWindowsMenuAction({ target: 'host', command: 'toggleMaximize' })"
+      @close="handleWindowsMenuAction({ target: 'host', command: 'closeWindow' })"
+    />
+    <el-container class="window-content">
     <!-- 左侧侧边栏 -->
     <el-aside
         class="aside-menu"
@@ -228,8 +309,8 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
           :collapse-transition="false"
       >
 
-        <div class="drag-region" data-tauri-drag-region>
-          <div class="brand" @mouseenter="showTrafficLights" @mouseleave="hideTrafficLights">
+        <div class="drag-region" :data-tauri-drag-region="isWindows ? undefined : ''">
+          <div class="brand" @mouseenter="!isWindows && showTrafficLights()" @mouseleave="!isWindows && hideTrafficLights()">
             <DiamondIcon class="brand-logo" aria-hidden="true"/>
             <span class="brand-text">Treasure</span>
           </div>
@@ -249,11 +330,11 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
         </el-icon>
       </div>
     </el-aside>
-    <el-container>
+    <el-container class="workspace-content">
       <!-- 顶部标签页 -->
-      <el-header height="40px !important" @mousedown="onHeaderMouseDown" @mouseenter="showTrafficLights" @mouseleave="hideTrafficLights">
+      <el-header height="40px !important" @mousedown="onHeaderMouseDown" @mouseenter="!isWindows && showTrafficLights()" @mouseleave="!isWindows && hideTrafficLights()">
         <!-- 空白div元素 用以优化页面布局并且实现窗口拖动功能 -->
-        <div v-if="tabsStore.tabs.length ==0" data-tauri-drag-region
+        <div v-if="tabsStore.tabs.length ==0" :data-tauri-drag-region="isWindows ? undefined : ''"
              style="width: 100%;height: 100%;background-color: var(--treasure-background-color)"></div>
         <el-tabs v-else
             v-model="tabsStore.activeTab"
@@ -293,7 +374,8 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
         />
       </el-main>
     </el-container>
-  </el-container>
+    </el-container>
+  </div>
 </template>
 
 <style lang="scss" scoped>
@@ -303,6 +385,15 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  .window-content {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
 
   .aside-menu {
     background-color: var(--treasure-side-backgroud-color);
@@ -328,7 +419,7 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
     .vertical-menu {
       border-right: none;
       background-color: inherit;
-      height: 100vh;
+      height: 100%;
       width: 100%;
       overflow: hidden;
 
@@ -461,7 +552,7 @@ background-color: var(--treasure-side-backgroud-color);
   .main-content {
     background-color: var(--treasure-background-color);
     padding: 0px;
-    height: calc(100vh - 40px);
+    height: calc(100% - 40px);
     min-height: 0;
     overflow: hidden;
   }
