@@ -230,6 +230,9 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
       return this.menus.some(item => item.menuPath === '/pluginManager')
     },
     menuScrollbarHeight(): string {
+      if (this.isWindows) {
+        return this.pluginManagerVisible ? 'calc(100% - 56px * 2)' : 'calc(100% - 56px)'
+      }
       return this.pluginManagerVisible ? 'calc(100% - 40px - 56px * 2)' : 'calc(100% - 40px - 56px)'
     },
     windowsApplicationMenu() {
@@ -285,10 +288,15 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
 </script>
 
 <template>
-  <div class="main-container" :class="{ 'is-windows': isWindows }">
+  <div
+    class="main-container"
+    :class="{ 'is-windows': isWindows }"
+    :style="{ '--treasure-sidebar-width': isCollapse ? '76px' : '128px' }"
+  >
     <WindowsTitleBar
       v-if="isWindows"
       :menu-groups="windowsApplicationMenu"
+      :collapsed="isCollapse"
       @menu-action="handleWindowsMenuAction"
       @minimize="handleWindowsMenuAction({ target: 'host', command: 'minimize' })"
       @toggle-maximize="handleWindowsMenuAction({ target: 'host', command: 'toggleMaximize' })"
@@ -309,7 +317,7 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
           :collapse-transition="false"
       >
 
-        <div class="drag-region" :data-tauri-drag-region="isWindows ? undefined : ''">
+        <div v-if="!isWindows" class="drag-region" data-tauri-drag-region>
           <div class="brand" @mouseenter="!isWindows && showTrafficLights()" @mouseleave="!isWindows && hideTrafficLights()">
             <DiamondIcon class="brand-logo" aria-hidden="true"/>
             <span class="brand-text">Treasure</span>

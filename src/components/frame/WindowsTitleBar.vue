@@ -17,6 +17,10 @@ export default defineComponent({
       type: Array as PropType<ApplicationMenuGroup[]>,
       required: true,
     },
+    collapsed: {
+      type: Boolean,
+      default: false,
+    },
   },
   emits: ['menu-action', 'minimize', 'toggle-maximize', 'close'],
   mounted() {
@@ -45,8 +49,9 @@ export default defineComponent({
 
 <template>
   <header class="windows-titlebar">
-    <div class="windows-app-mark" data-tauri-drag-region aria-label="Treasure">
+    <div class="windows-app-brand" :class="{ 'is-collapsed': collapsed }" data-tauri-drag-region aria-label="Treasure">
       <DiamondIcon aria-hidden="true" />
+      <span class="windows-app-brand-text">Treasure</span>
     </div>
 
     <nav class="windows-menu-bar" aria-label="应用菜单">
@@ -119,18 +124,48 @@ export default defineComponent({
   z-index: 1100;
 }
 
-.windows-app-mark {
-  width: 40px;
+.windows-app-brand {
+  width: var(--treasure-sidebar-width, 128px);
+  flex: 0 0 var(--treasure-sidebar-width, 128px);
+  transition: width 0.3s ease-in-out, flex-basis 0.3s ease-in-out;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 40px;
+  gap: 5px;
+  overflow: hidden;
+  background: var(--treasure-side-backgroud-color);
+  border-right: 1px solid var(--el-border-color-light);
+  color: var(--treasure-side-text);
 
   svg {
     width: 16px;
     height: 16px;
     color: var(--treasure-side-text);
+    flex: 0 0 auto;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+    transform: translateY(-2px);
   }
+
+  &.is-collapsed {
+    .windows-app-brand-text {
+      display: none;
+    }
+  }
+}
+
+.windows-app-brand-text {
+  font-family: 'Pinyon Script', cursive;
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  background: linear-gradient(100deg, #fff0bd 0%, #e8bd61 38%, #c99546 66%, #c5a8dc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+  transform: translateY(-2px);
+  text-shadow: 0 1px 9px rgba(232, 201, 138, 0.12);
 }
 
 .windows-menu-bar {
@@ -147,7 +182,7 @@ export default defineComponent({
   :deep(.el-sub-menu__title) {
     height: 39px;
     line-height: 39px;
-    padding: 0 11px;
+    padding: 0 8px;
     color: var(--treasure-tab-text);
     font-size: 12px;
     border-bottom: 0 !important;
@@ -160,6 +195,12 @@ export default defineComponent({
     &:focus-visible {
       background: color-mix(in srgb, var(--treasure-side-active-bg) 56%, transparent);
     }
+  }
+
+  :deep(.el-sub-menu.is-active .el-sub-menu__title),
+  :deep(.el-sub-menu.is-opened .el-sub-menu__title) {
+    background: color-mix(in srgb, var(--treasure-side-active-bg) 56%, transparent) !important;
+    color: var(--el-color-primary);
   }
 }
 
@@ -201,16 +242,22 @@ export default defineComponent({
 
 <style lang="scss">
 .windows-titlebar-menu-popper {
-  min-width: 210px !important;
-  padding: 4px !important;
-  border: 1px solid var(--treasure-border-color) !important;
-  border-radius: 6px !important;
-  background: var(--treasure-background-color) !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18) !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 
   .el-menu {
+    width: max-content;
+    min-width: 164px;
+    padding: 4px;
     border-right: 0;
-    background: transparent;
+    border: 1px solid var(--treasure-border-color);
+    border-radius: 6px;
+    background: var(--treasure-bg-tabs);
+    box-shadow: 0 8px 24px rgba(70, 51, 40, 0.16);
   }
 
   .el-menu-item,
@@ -221,6 +268,7 @@ export default defineComponent({
     color: var(--treasure-tab-text);
     font-size: 12px;
     border-radius: 4px;
+    background: transparent !important;
   }
 
   .el-menu-item:hover,
