@@ -16,6 +16,7 @@
         { "url": "https://github.com/*" },
         { "url": "https://release-assets.githubusercontent.com/*" },
         { "url": "https://objects.githubusercontent.com/*" },
+        { "url": "https://gitee.com/Luzenrocy/treasure-plugins/releases/download/plugin/*" },
         { "url": "https://huggingface.co/*" },
         { "url": "https://huggingface.com/*" },
         { "url": "https://luzenrocy-plugin-market.ms.show/*" }
