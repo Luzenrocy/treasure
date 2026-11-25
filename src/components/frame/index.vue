@@ -182,7 +182,7 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
           await invoke('toggle_fullscreen_window');
           break;
         case 'about':
-          ElMessage.info('Treasure v1.0.0');
+          ElMessage.info('Treasure v1.2.0');
           break;
         default:
           this.executeEditCommand(action.command);
@@ -312,6 +312,7 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
       <el-menu
           :default-active="activeMenu"
           class="vertical-menu"
+          :class="{ 'is-collapsed': isCollapse }"
           :collapse="isCollapse"
           :router="true"
           :collapse-transition="false"
@@ -529,6 +530,41 @@ background-color: var(--treasure-side-backgroud-color);
       opacity: 1;
     }
 
+  }
+
+  &.is-windows .aside-menu .vertical-menu.is-collapsed {
+    // Element Plus positions a collapsed icon for its built-in 64px menu.
+    // Treasure uses a 76px collapsed sidebar, so center every icon against
+    // the real column width instead of retaining the framework's padding.
+    :deep(> .el-menu-item),
+    :deep(> .el-sub-menu > .el-sub-menu__title) {
+      justify-content: center;
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    :deep(.plugin-icon-inline),
+    :deep(.plugin-icon-image) {
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+    }
+
+    // Keep the active marker from consuming layout width and shifting its
+    // icon away from the title-bar brand's center line.
+    :deep(> .el-menu-item.is-active),
+    :deep(> .el-sub-menu.is-active > .el-sub-menu__title) {
+      border-left: 0 !important;
+
+      &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 3px;
+        background-color: var(--treasure-side-accent);
+      }
+    }
   }
 
   :deep(.el-tabs__item) {

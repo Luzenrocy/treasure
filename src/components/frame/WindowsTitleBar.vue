@@ -215,22 +215,35 @@ export default defineComponent({
 
 .windows-titlebar-drag {
   flex: 1 1 auto;
-  min-width: 12px;
+  min-width: 8px;
 }
 
 .windows-window-controls {
+  --windows-control-button-width: 36px;
+  --windows-control-icon-size: 16px;
   display: flex;
   flex: 0 0 auto;
+  gap: 0;
 
   button {
-    width: 46px;
+    // Windows' standard caption buttons are 46px wide. A compact in-app
+    // title bar does not need that much empty space around a 16px icon.
+    width: var(--windows-control-button-width);
+    min-width: var(--windows-control-button-width);
     height: 39px;
     border: 0;
+    padding: 0;
     background: transparent;
     color: inherit;
     display: grid;
     place-items: center;
     cursor: default;
+
+    :deep(.el-icon) {
+      width: var(--windows-control-icon-size);
+      height: var(--windows-control-icon-size);
+      font-size: var(--windows-control-icon-size);
+    }
 
     &:hover {
       background: rgba(0, 0, 0, 0.08);
