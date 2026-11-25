@@ -29,6 +29,7 @@ import { useMenuRegistry } from '@/store/menuRegistry';
 import { useTabsStore } from '@/store/tabs';
 import { logEvent } from '@/utils/logger';
 import { fileGrants, FileGrantService, isPathWithinGrantedRoot } from './fileGrants';
+import { isInstalledPluginOrigin, isInstalledPluginUrl } from '@/utils/pluginUrl';
 
 /** 插件 SQL 安全执行器（全局单例） */
 let executor: PluginSqlExecutor;
@@ -223,7 +224,13 @@ export function isExpectedPluginOrigin(source: Window | null, origin: string | n
     if (!frame) return false;
 
     const src = frame.getAttribute?.('src') || frame.src || '';
-    if (src.startsWith('plugin://localhost/')) return origin === null || origin === 'plugin://localhost';
+    if (isInstalledPluginUrl(src)) {
+        // WebKit reports a null origin for the plugin: scheme on some macOS
+        // versions. WebView2 uses a normal HTTP origin and must match exactly.
+        return src.startsWith('plugin://localhost/')
+            ? origin === null || origin === 'plugin://localhost'
+            : isInstalledPluginOrigin(origin) && origin === 'http://plugin.localhost';
+    }
     try {
         return origin === new URL(src).origin;
     } catch {
@@ -248,8 +255,10 @@ export function initPluginBridge() {
 
     window.addEventListener('message', async (event) => {
         // ── 第 1 步：origin 校验 ──────────────────────────────
-        // 已安装插件只能来自 plugin://localhost；调试插件必须精确匹配
-        // 其登记开发地址的 origin。plugin:// 协议在部分 Webview 中为 null。
+        // 已安装插件仅来自 Treasure 的 custom protocol。macOS 使用
+        // plugin://localhost，Windows WebView2 使用 http://plugin.localhost；
+        // 该协议在部分 Webview 中的 origin 为 null。调试插件必须精确匹配
+        // 其登记开发地址的 origin。
         const origin = event.origin ?? (event as any).originalEvent?.origin ?? null;
 
         await logEvent('debug', 'bridge', 'message received', { origin, operation: event.data?.operation });
@@ -776,7 +785,7 @@ export function dispatchMenuEvent(pluginCode: string, menuId: string, itemId: st
     if (!iframe?.contentWindow) return;
     const src = iframe.getAttribute('src') || iframe.src || '';
     let targetOrigin = '*';
-    try { targetOrigin = new URL(src).origin; } catch { if (src.startsWith('plugin://localhost/')) targetOrigin = 'plugin://localhost'; }
+    try { targetOrigin = new URL(src).origin; } catch { if (isInstalledPluginUrl(src)) targetOrigin = 'plugin://localhost'; }
     iframe.contentWindow.postMessage({ type: 'treasure-menu-event', menuId, itemId, pluginCode }, targetOrigin);
 }
 

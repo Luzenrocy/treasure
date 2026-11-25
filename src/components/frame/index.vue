@@ -343,7 +343,7 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
       <el-header height="40px !important" @mousedown="onHeaderMouseDown" @mouseenter="!isWindows && showTrafficLights()" @mouseleave="!isWindows && hideTrafficLights()">
         <!-- 空白div元素 用以优化页面布局并且实现窗口拖动功能 -->
         <div v-if="tabsStore.tabs.length ==0" :data-tauri-drag-region="isWindows ? undefined : ''"
-             style="width: 100%;height: 100%;background-color: var(--treasure-background-color)"></div>
+             :style="{ width: '100%', height: '100%', backgroundColor: isWindows ? 'var(--treasure-bg-tabs)' : 'var(--treasure-background-color)' }"></div>
         <el-tabs v-else
             v-model="tabsStore.activeTab"
             type="border-card"
@@ -555,6 +555,10 @@ background-color: var(--treasure-side-backgroud-color);
     padding: 0;
     height: 40px;
     cursor: pointer;
+  }
+
+  &.is-windows .el-header {
+    background-color: var(--treasure-bg-tabs);
   }
 
   .main-content {

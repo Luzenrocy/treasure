@@ -117,7 +117,6 @@ export default defineComponent({
   display: flex;
   align-items: stretch;
   background: var(--treasure-bg-tabs);
-  border-bottom: 1px solid var(--treasure-border-color);
   color: var(--treasure-tab-text);
   user-select: none;
   position: relative;
@@ -176,13 +175,22 @@ export default defineComponent({
 
 .windows-menu-root {
   height: 39px;
+  --el-menu-horizontal-height: 39px;
   border-bottom: 0;
   background: transparent;
 
-  :deep(.el-sub-menu__title) {
+  :deep(> .el-sub-menu) {
+    flex: 0 0 auto;
+    height: 39px;
+    min-width: 0;
+    margin: 0 !important;
+  }
+
+  :deep(> .el-sub-menu > .el-sub-menu__title) {
     height: 39px;
     line-height: 39px;
-    padding: 0 8px;
+    min-width: 0 !important;
+    padding: 0 7px !important;
     color: var(--treasure-tab-text);
     font-size: 12px;
     border-bottom: 0 !important;
@@ -197,8 +205,8 @@ export default defineComponent({
     }
   }
 
-  :deep(.el-sub-menu.is-active .el-sub-menu__title),
-  :deep(.el-sub-menu.is-opened .el-sub-menu__title) {
+  :deep(> .el-sub-menu.is-active > .el-sub-menu__title),
+  :deep(> .el-sub-menu.is-opened > .el-sub-menu__title) {
     background: color-mix(in srgb, var(--treasure-side-active-bg) 56%, transparent) !important;
     color: var(--el-color-primary);
   }

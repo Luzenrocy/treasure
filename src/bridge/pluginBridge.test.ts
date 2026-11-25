@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { capabilityRegistry, MENU_CAPABILITY_VERSION, REQUEST_TYPE_BY_CAPABILITY, isKnownRequestType, requestTypeToCapability, responseTypeForRequestType, toResult, MENU_LABEL_ALIASES, findSubmenuRecursive, removeMenuItem, moveItemToEnd, mountPluginMenus, type MenuBuilderDeps } from './pluginBridge';
+import { capabilityRegistry, MENU_CAPABILITY_VERSION, REQUEST_TYPE_BY_CAPABILITY, isExpectedPluginOrigin, isKnownRequestType, requestTypeToCapability, responseTypeForRequestType, toResult, MENU_LABEL_ALIASES, findSubmenuRecursive, removeMenuItem, moveItemToEnd, mountPluginMenus, type MenuBuilderDeps } from './pluginBridge';
 
 describe('menu bridge contract', () => {
   it('registers versioned menu operations with payload validation (建议 4: 结构校验增强)', () => {
@@ -71,6 +71,32 @@ describe('capability-scoped request types (方案 B: 按能力域拆分消息类
       logs: 'treasure-log-request',
     };
     expect(REQUEST_TYPE_BY_CAPABILITY).toEqual(expected);
+  });
+});
+
+describe('installed plugin origins', () => {
+  function installFrame(src: string): HTMLIFrameElement {
+    const frame = document.createElement('iframe');
+    frame.dataset.treasurePlugin = 'example';
+    frame.setAttribute('src', src);
+    document.body.append(frame);
+    return frame;
+  }
+
+  it('accepts the WebView2 custom-protocol origin only for a Windows plugin frame', () => {
+    const frame = installFrame('http://plugin.localhost/plugin/example/index.html');
+    expect(isExpectedPluginOrigin(frame.contentWindow, 'http://plugin.localhost')).toBe(true);
+    expect(isExpectedPluginOrigin(frame.contentWindow, null)).toBe(false);
+    expect(isExpectedPluginOrigin(frame.contentWindow, 'plugin://localhost')).toBe(false);
+    frame.remove();
+  });
+
+  it('keeps the opaque-origin compatibility path exclusive to macOS plugin frames', () => {
+    const frame = installFrame('plugin://localhost/plugin/example/index.html');
+    expect(isExpectedPluginOrigin(frame.contentWindow, null)).toBe(true);
+    expect(isExpectedPluginOrigin(frame.contentWindow, 'plugin://localhost')).toBe(true);
+    expect(isExpectedPluginOrigin(frame.contentWindow, 'http://plugin.localhost')).toBe(false);
+    frame.remove();
   });
 });
 

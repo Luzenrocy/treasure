@@ -32,6 +32,7 @@ import {defineComponent} from "vue";
 import {ElMessage, ElAlert} from 'element-plus';
 import {Loading} from '@element-plus/icons-vue';
 import { exists, BaseDirectory } from '@tauri-apps/plugin-fs';
+import { installedPluginUrl } from '@/utils/pluginUrl';
 
 export default defineComponent({
   name: 'Plugin',
@@ -93,7 +94,7 @@ export default defineComponent({
           return;
         }
 
-        this.iframeSrc = `plugin://localhost/${relativePath}`;
+        this.iframeSrc = installedPluginUrl(relativePath);
         this.loaded = true;
 
         console.log('插件加载路径:', {
