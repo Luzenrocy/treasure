@@ -124,6 +124,7 @@ export default defineComponent({
 }
 
 .windows-app-brand {
+  box-sizing: border-box;
   width: var(--treasure-sidebar-width, 128px);
   flex: 0 0 var(--treasure-sidebar-width, 128px);
   transition: width 0.3s ease-in-out, flex-basis 0.3s ease-in-out;

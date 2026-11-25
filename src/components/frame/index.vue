@@ -405,16 +405,16 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
 
   .aside-menu {
     background-color: var(--treasure-side-backgroud-color);
-    width: 128px;
-    transition: width 0.3s ease-in-out;
+    box-sizing: border-box;
+    width: var(--treasure-sidebar-width, 128px);
+    flex: 0 0 var(--treasure-sidebar-width, 128px);
+    transition: width 0.3s ease-in-out, flex-basis 0.3s ease-in-out;
     position: relative;
     border-right: 1px solid var(--el-border-color-light);
     overflow: visible;
     z-index: 100;
 
     &.is-collapse {
-      width: 76px;
-
       .brand .brand-text {
         display: none !important;
       }
