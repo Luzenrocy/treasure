@@ -388,8 +388,6 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
 </template>
 
 <style lang="scss" scoped>
-@import url('https://fonts.googleapis.com/css2?family=Pinyon+Script&display=swap');
-
 .main-container {
   width: 100vw;
   height: 100vh;

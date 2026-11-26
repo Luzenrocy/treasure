@@ -5,6 +5,14 @@
     font-display: swap;
 }
 
+@font-face {
+    font-family: "Pinyon Script";
+    src: url("/fonts/pinyon-script/PinyonScript-Regular.ttf") format("truetype");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
+
 html,
 body {
     margin: 0;
