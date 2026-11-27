@@ -15,6 +15,12 @@
         background: #f5efe4;
         color: #5c5347;
         font-family: sans-serif;
+        flex-direction: column;
+      }
+      #startup-placeholder button {
+        margin-top: 16px;
+        padding: 6px 18px;
+        cursor: pointer;
       }
       @font-face {
         font-family: 'Ruhua Simeng';
@@ -28,6 +34,46 @@
 
   <body>
     <div id="app"><div id="startup-placeholder" role="status">正在启动…</div></div>
+    <script>
+      // This must run without the application bundle, so it can recover when
+      // the WebView loads the HTML but fails to start the frontend.
+      (function () {
+        if (navigator.userAgent.indexOf('Windows') === -1) return;
+        var key = 'treasure-startup-reloaded';
+        function report(message, details) {
+          try {
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+              window.__TAURI_INTERNALS__.invoke('log_event', {
+                level: 'error', category: 'sys', message: message, details: details || null
+              }).catch(function () {});
+            }
+          } catch (_) { /* The native bridge may not be ready yet. */ }
+        }
+        window.addEventListener('error', function (event) {
+          if (!document.getElementById('startup-placeholder')) return;
+          var target = event.target;
+          report('Frontend startup error', event.message || (target && (target.src || target.href)) || 'Unknown resource error');
+        }, true);
+        window.setTimeout(function () {
+          var placeholder = document.getElementById('startup-placeholder');
+          if (!placeholder) return;
+          report('Frontend did not mount before the startup timeout');
+          try {
+            if (sessionStorage.getItem(key) !== '1') {
+              sessionStorage.setItem(key, '1');
+              placeholder.textContent = '启动时间较长，正在重新加载…';
+              window.location.reload();
+              return;
+            }
+          } catch (_) { /* Keep the retry button available if storage is blocked. */ }
+          placeholder.textContent = '页面启动失败，请重试。';
+          var button = document.createElement('button');
+          button.textContent = '重试';
+          button.onclick = function () { window.location.reload(); };
+          placeholder.appendChild(button);
+        }, 20000);
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -69,7 +69,10 @@ pub fn create(app: &mut tauri::App) -> tauri::Result<()> {
                     }
                 });
                 std::thread::sleep(std::time::Duration::from_secs(10));
-                reveal(&handle);
+                if !MAIN_SHOWN.load(Ordering::Acquire) {
+                    tracing::warn!("Page load did not finish before the startup timeout; showing the main window");
+                    reveal(&handle);
+                }
             }
             Err(error) => {
                 show_failure(&handle, &format!("Unable to create main window: {error}"));
@@ -164,8 +167,10 @@ fn add_content(window: &tauri::Window) -> Result<(), String> {
 #[cfg(windows)]
 fn add_content(window: &tauri::Window) -> Result<(), String> {
     use windows::core::{w, PCWSTR};
-    use windows::Win32::Foundation::{HINSTANCE, RECT, WPARAM};
+    use windows::Win32::Foundation::{COLORREF, HINSTANCE, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, HGDIOBJ};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Shell::SetWindowSubclass;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, GetClientRect, LoadImageW, SendMessageW, IMAGE_ICON, LR_SHARED,
         STM_SETICON, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
@@ -175,6 +180,15 @@ fn add_content(window: &tauri::Window) -> Result<(), String> {
     let mut rect = RECT::default();
     unsafe {
         GetClientRect(parent, &mut rect).map_err(|error| error.to_string())?;
+        // STATIC controls otherwise paint their own system-coloured rectangles.
+        let brush = CreateSolidBrush(COLORREF(0x00e4eff5));
+        if brush.0.is_null() {
+            return Err("无法创建启动窗口背景".into());
+        }
+        if !SetWindowSubclass(parent, Some(splash_subclass_proc), 0x5452_5350, brush.0 as usize).as_bool() {
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+            return Err("无法设置启动窗口背景".into());
+        }
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
@@ -218,4 +232,29 @@ fn add_content(window: &tauri::Window) -> Result<(), String> {
         SendMessageW(icon_view, STM_SETICON, Some(WPARAM(icon.0 as usize)), None);
     }
     Ok(())
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn splash_subclass_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _id: usize,
+    brush: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::Graphics::Gdi::{DeleteObject, SetBkMode, HDC, HGDIOBJ, TRANSPARENT};
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::{WM_CTLCOLORSTATIC, WM_NCDESTROY};
+
+    if message == WM_CTLCOLORSTATIC {
+        unsafe { SetBkMode(HDC(wparam.0 as *mut _), TRANSPARENT) };
+        return LRESULT(brush as isize);
+    }
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if message == WM_NCDESTROY {
+        let _ = unsafe { DeleteObject(HGDIOBJ(brush as *mut _)) };
+    }
+    result
 }

@@ -17,6 +17,9 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 app.use(pinia)
 app.use(router)
 app.mount('#app')
+if (navigator.userAgent.includes('Windows')) {
+    try { sessionStorage.removeItem('treasure-startup-reloaded'); } catch { /* Storage may be unavailable. */ }
+}
 
 initPluginBridge();
 initDatabase();

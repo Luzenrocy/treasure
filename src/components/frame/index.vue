@@ -14,6 +14,7 @@ import {getCurrentWindow} from '@tauri-apps/api/window';
 import {invoke} from '@tauri-apps/api/core';
 import {Menu, Submenu, MenuItem as TauriMenuItem, CheckMenuItem, PredefinedMenuItem, type SubmenuOptions} from '@tauri-apps/api/menu';
 import { logEvent } from '@/utils/logger';
+import { withStartupTimeout } from '@/utils/startupTimeout';
 import type {RouteLocationNormalizedLoaded} from 'vue-router';
 import {
   buildApplicationMenu,
@@ -41,7 +42,8 @@ export default defineComponent({
       this.startupLoading = true;
       this.startupError = '';
       try {
-        const result = await this.menuStore.fetchMenus();
+        const loading = this.menuStore.fetchMenus();
+        const result = await (this.isWindows ? withStartupTimeout(loading) : loading);
         if (result.code !== 1) {
           this.startupError = result.msg || '初始化失败，请重试';
           return;
