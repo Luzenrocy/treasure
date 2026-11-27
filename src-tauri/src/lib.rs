@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use tauri::Manager;
 use tauri::State;
 use tauri_plugin_notification::NotificationExt;
@@ -15,6 +16,62 @@ mod db;
 use db::Database;
 mod logging;
 use logging::LogEngine;
+
+static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
+static WINDOW_CREATED_MS: OnceLock<u64> = OnceLock::new();
+static PAGE_FINISHED_MS: OnceLock<u64> = OnceLock::new();
+
+struct StartupState {
+    app_data_dir: PathBuf,
+    ready: Mutex<Option<Arc<InitializedState>>>,
+}
+
+struct InitializedState {
+    database: Database,
+    log_engine: Arc<LogEngine>,
+}
+
+impl StartupState {
+    async fn get(self: &Arc<Self>) -> Result<Arc<InitializedState>, String> {
+        let startup = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let mut ready = startup.ready.lock().map_err(|_| "初始化状态不可用".to_string())?;
+            if let Some(initialized) = ready.as_ref() {
+                return Ok(Arc::clone(initialized));
+            }
+            let app_data_dir = &startup.app_data_dir;
+            let setup_started = Instant::now();
+            fs::create_dir_all(app_data_dir).map_err(|error| error.to_string())?;
+            let db_path = app_data_dir.join("treasure.db");
+            let path = db_path.to_str().ok_or("数据库路径包含无效字符")?;
+            let database = Database::open(path, 5000).map_err(|error| error.to_string())?;
+            let database_elapsed = setup_started.elapsed();
+            let log_level = LogEngine::read_level_from_db(&database);
+            let retention_days = LogEngine::read_retention_days_from_db(&database);
+            let db_enabled = LogEngine::read_db_enabled_from_db(&database);
+            let biz_enabled = LogEngine::read_biz_enabled_from_db(&database);
+            let sys_enabled = LogEngine::read_sys_enabled_from_db(&database);
+            let log_engine = LogEngine::init(app_data_dir.join("logs"), retention_days, log_level, db_enabled, biz_enabled, sys_enabled);
+            info!(elapsed_ms = STARTUP_TIME.get().map(|time| time.elapsed().as_millis() as u64).unwrap_or_default(),
+                setup_ms = setup_started.elapsed().as_millis() as u64,
+                database_ms = database_elapsed.as_millis() as u64,
+                "Native startup initialized");
+            let initialized = Arc::new(InitializedState { database, log_engine });
+            *ready = Some(Arc::clone(&initialized));
+            Ok(initialized)
+        }).await.map_err(|error| format!("初始化线程失败：{error}"))?
+    }
+}
+
+#[tauri::command]
+fn record_startup_ready() {
+    if let Some(started) = STARTUP_TIME.get() {
+        info!(elapsed_ms = started.elapsed().as_millis() as u64,
+            window_created_ms = ?WINDOW_CREATED_MS.get(),
+            page_finished_ms = ?PAGE_FINISHED_MS.get(),
+            "Startup menu and migrations ready");
+    }
+}
 #[cfg(windows)]
 mod windows_titlebar;
 
@@ -479,8 +536,8 @@ fn set_traffic_lights_visible(window: tauri::WebviewWindow, visible: bool) -> Re
 }
 
 #[tauri::command]
-async fn get_log_settings(state: State<'_, Database>) -> Result<serde_json::Value, String> {
-    let db = state.inner().clone();
+async fn get_log_settings(state: State<'_, Arc<StartupState>>) -> Result<serde_json::Value, String> {
+    let db = state.get().await?.database.clone();
     let empty: Vec<rusqlite::types::Value> = vec![];
     let rows = db.query_value(
         "SELECT param_key, param_value FROM tp_setting WHERE param_code LIKE 'treasure::log_%'",
@@ -490,7 +547,8 @@ async fn get_log_settings(state: State<'_, Database>) -> Result<serde_json::Valu
 }
 
 #[tauri::command]
-async fn log_event(level: String, category: String, message: String, details: Option<String>) -> Result<(), String> {
+async fn log_event(level: String, category: String, message: String, details: Option<String>, state: State<'_, Arc<StartupState>>) -> Result<(), String> {
+    let _initialized = state.get().await?;
     let details = details.unwrap_or_default();
     match level.as_str() {
         "trace" => trace!(target: "plugin", category = category, message = message, details = details),
@@ -504,19 +562,30 @@ async fn log_event(level: String, category: String, message: String, details: Op
 }
 
 #[tauri::command]
-async fn set_log_level(level: String, state: tauri::State<'_, Arc<LogEngine>>) -> Result<(), String> {
-    state.inner().set_level_from_string(&level)
+async fn set_log_level(level: String, state: State<'_, Arc<StartupState>>) -> Result<(), String> {
+    state.get().await?.log_engine.set_level_from_string(&level)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    STARTUP_TIME.get_or_init(Instant::now);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_http::init())
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Finished {
+                if let Some(started) = STARTUP_TIME.get() {
+                    let _ = PAGE_FINISHED_MS.set(started.elapsed().as_millis() as u64);
+                }
+            }
+        })
         .setup(|app| {
+            if let Some(started) = STARTUP_TIME.get() {
+                let _ = WINDOW_CREATED_MS.set(started.elapsed().as_millis() as u64);
+            }
             // 启动时申请 macOS 通知权限
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -532,21 +601,13 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir");
-            fs::create_dir_all(&app_data_dir).ok();
-            let db_path = app_data_dir.join("treasure.db");
-            let database = Database::open(db_path.to_str().unwrap(), 5000)
-                .expect("Failed to open database");
-            
-            let log_dir = app_data_dir.join("logs");
-            let log_level = LogEngine::read_level_from_db(&database);
-            let retention_days = LogEngine::read_retention_days_from_db(&database);
-            let db_enabled = LogEngine::read_db_enabled_from_db(&database);
-            let biz_enabled = LogEngine::read_biz_enabled_from_db(&database);
-            let sys_enabled = LogEngine::read_sys_enabled_from_db(&database);
-            let log_engine = LogEngine::init(log_dir, retention_days, log_level, db_enabled, biz_enabled, sys_enabled);
-            
-            app.manage(database);
-            app.manage(log_engine);
+            let startup = Arc::new(StartupState { app_data_dir, ready: Mutex::new(None) });
+            app.manage(Arc::clone(&startup));
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = startup.get().await {
+                    eprintln!("Startup initialization failed: {error}");
+                }
+            });
             
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(windows)]
@@ -565,6 +626,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            record_startup_ready,
             move_to_trash,
             delete_directory,
             copy_directory,
@@ -645,6 +707,31 @@ fn get_mime_type(path: &PathBuf) -> &'static str {
         Some("txt") => "text/plain; charset=utf-8",
         Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn initialization_can_retry_and_concurrent_callers_share_the_result() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("treasure-startup-{}-{unique}", std::process::id()));
+        fs::write(&directory, b"blocking directory creation").unwrap();
+        let startup = Arc::new(StartupState { app_data_dir: directory.clone(), ready: Mutex::new(None) });
+
+        assert!(startup.get().await.is_err());
+        fs::remove_file(&directory).unwrap();
+
+        let (first, second) = tokio::join!(startup.get(), startup.get());
+        let first = first.expect("first initialization");
+        let second = second.expect("concurrent initialization");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(directory.join("treasure.db").is_file());
+
+        drop((first, second, startup));
+        fs::remove_dir_all(directory).unwrap();
     }
 }
 

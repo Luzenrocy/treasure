@@ -24,9 +24,9 @@ export async function awaitReady(): Promise<Response> {
     _readyPromise = _readyPromise.then(r => {
         if (r.code !== 1) _readyPromise = null;
         return r;
-    }).catch(() => {
+    }).catch(error => {
         _readyPromise = null;
-        throw _readyPromise;
+        throw error;
     });
     return _readyPromise;
 }

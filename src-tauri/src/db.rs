@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use chrono::Utc;
 use tracing::{debug, info};
+use crate::StartupState;
 
 const DEFAULT_TIMEOUT_MS: u64 = 15000;
 
@@ -269,17 +270,18 @@ fn extract_table(sql: &str) -> String {
 }
 
 #[tauri::command]
-pub fn db_ready(_state: State<'_, Database>) -> Value {
-    json!({ "ready": true, "code": 1 })
+pub async fn db_ready(state: State<'_, Arc<StartupState>>) -> Result<Value, String> {
+    state.get().await?;
+    Ok(json!({ "ready": true, "code": 1 }))
 }
 
 #[tauri::command]
 pub async fn db_query(
-    state: State<'_, Database>,
+    state: State<'_, Arc<StartupState>>,
     sql: String,
     params: Vec<Value>,
 ) -> Result<Value, String> {
-    let db = state.inner().clone();
+    let db = state.get().await?.database.clone();
     let start = std::time::Instant::now();
     let sql_truncated = sql.chars().take(200).collect::<String>();
     let table_name = extract_table(&sql);
@@ -304,11 +306,11 @@ pub async fn db_query(
 
 #[tauri::command]
 pub async fn db_execute(
-    state: State<'_, Database>,
+    state: State<'_, Arc<StartupState>>,
     sql: String,
     params: Vec<Value>,
 ) -> Result<Value, String> {
-    let db = state.inner().clone();
+    let db = state.get().await?.database.clone();
     let start = std::time::Instant::now();
     let sql_truncated = sql.chars().take(200).collect::<String>();
     let table_name = extract_table(&sql);
@@ -333,11 +335,11 @@ pub async fn db_execute(
 
 #[tauri::command]
 pub async fn db_transaction(
-    state: State<'_, Database>,
+    state: State<'_, Arc<StartupState>>,
     sqls: Vec<String>,
     all_params: Vec<Vec<Value>>,
 ) -> Result<Value, String> {
-    let db = state.inner().clone();
+    let db = state.get().await?.database.clone();
     let start = std::time::Instant::now();
     let sql_count = sqls.len();
     
@@ -362,11 +364,11 @@ pub async fn db_transaction(
 
 #[tauri::command]
 pub async fn db_readonly_transaction(
-    state: State<'_, Database>,
+    state: State<'_, Arc<StartupState>>,
     sqls: Vec<String>,
     all_params: Vec<Vec<Value>>,
 ) -> Result<Value, String> {
-    let db = state.inner().clone();
+    let db = state.get().await?.database.clone();
     let start = std::time::Instant::now();
     let sql_count = sqls.len();
     
@@ -391,9 +393,9 @@ pub async fn db_readonly_transaction(
 
 #[tauri::command]
 pub async fn db_run_migrations(
-    state: State<'_, Database>,
+    state: State<'_, Arc<StartupState>>,
 ) -> Result<Value, String> {
-    let db = state.inner().clone();
+    let db = state.get().await?.database.clone();
     timeout(Duration::from_millis(60000), task::spawn_blocking(move || -> Result<Value, String> {
         let v: i64 = db.run_migrations().map_err(|e| e.to_string())?;
         Ok(json!({ "code": 1, "version": v as u64 }))

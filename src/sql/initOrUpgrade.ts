@@ -1,6 +1,6 @@
 import { ElMessage } from 'element-plus';
 import { Response } from '@/class';
-import { invoke } from '@tauri-apps/api/core';
+import { awaitReady } from '@/sql/dbClient';
 
 // 模块级缓存 Promise，防 HMR 重载重跑迁移
 let _initPromise: Promise<Response> | null = null;
@@ -21,11 +21,7 @@ export function initDatabase(): Promise<Response> {
 
 export async function runInitOrUpgrade(): Promise<Response> {
     try {
-        const r = await invoke<{ code: number; version: number }>('db_run_migrations');
-        if (r.code === 1) {
-            return Response.ok({ version: r.version });
-        }
-        return Response.error('迁移失败');
+        return await awaitReady();
     } catch (e) {
         return Response.error('数据库初始化失败');
     }

@@ -19,11 +19,12 @@ export const useMenuStore = defineStore('menu', {
       const ready = await awaitReady();
       if (ready.code !== 1) {
         this.menus = [];
-        return;
+        return ready;
       }
       let res = await getMenus()
       if (res.code != 1) {
         ElMessage.error('菜单获取失败！原因：' + res.msg)
+        return res;
       }
       const menuList: MenuItem[] = res.data || []
       this.menus = menuList
@@ -37,6 +38,7 @@ export const useMenuStore = defineStore('menu', {
         })
 
       console.log(this.menus)
+      return res;
     },
   }
 });

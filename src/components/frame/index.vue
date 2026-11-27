@@ -32,9 +32,26 @@ export default defineComponent({
       menuRegistry: useMenuRegistry(),
       menuRebuildTimer: null as number | null,
       isWindows: navigator.userAgent.includes('Windows'),
+      startupLoading: true,
+      startupError: '',
     }
   },
   methods: {
+    async loadStartup() {
+      this.startupLoading = true;
+      this.startupError = '';
+      try {
+        const result = await this.menuStore.fetchMenus();
+        if (result.code !== 1) {
+          this.startupError = result.msg || '初始化失败，请重试';
+          return;
+        }
+        this.startupLoading = false;
+        void invoke('record_startup_ready').catch(() => {});
+      } catch (error) {
+        this.startupError = error instanceof Error ? error.message : '初始化失败，请重试';
+      }
+    },
     toggleCollapse() {
       this.isCollapse = !this.isCollapse
     },
@@ -241,7 +258,7 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
     }
   },
   async mounted() {
-    await this.menuStore.fetchMenus()
+    void this.loadStartup()
     window.__TREASURE_HOST__ = true
     if (navigator.userAgent.includes('Mac')) {
       invoke('set_traffic_lights_visible', { visible: false }).catch(() => {})
@@ -293,6 +310,15 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
     :class="{ 'is-windows': isWindows }"
     :style="{ '--treasure-sidebar-width': isCollapse ? '76px' : '128px' }"
   >
+    <div v-if="startupLoading" class="startup-overlay" role="status" aria-live="polite">
+      <div class="startup-panel">
+        <template v-if="startupError">
+          <p>启动失败，{{ startupError }}</p>
+          <el-button type="primary" @click="loadStartup">重试</el-button>
+        </template>
+        <p v-else>正在启动…</p>
+      </div>
+    </div>
     <WindowsTitleBar
       v-if="isWindows"
       :menu-groups="windowsApplicationMenu"
@@ -388,6 +414,21 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
 </template>
 
 <style lang="scss" scoped>
+.startup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 239, 228, 0.82);
+}
+
+.startup-panel {
+  text-align: center;
+  color: var(--treasure-tab-text);
+}
+
 .main-container {
   width: 100vw;
   height: 100vh;
