@@ -42,6 +42,7 @@ if [[ $lookup_status == 404 ]] ||
     --data-urlencode "access_token=${GITEE_TOKEN}" \
     --data-urlencode "tag_name=${RELEASE_TAG}" \
     --data-urlencode "name=Treasure ${RELEASE_TAG}" \
+    --data-urlencode 'prerelease=true' \
     --data-urlencode "body=Mirrored from https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
     --data-urlencode "target_commitish=${RELEASE_SHA}" "${api}/releases" || true
   lookup_status=$(read_api --output "$response" --write-out '%{http_code}' "$release_lookup")
@@ -89,6 +90,9 @@ upload_asset() {
       curl_status=$?
     read -r status uploaded seconds <<<"$result"
     echo "Gitee upload result for ${name}: curl=${curl_status}, HTTP=${status}, sent=${uploaded} bytes, seconds=${seconds}"
+    if [[ $status == 4?? || $status == 5?? ]]; then
+      jq -r 'if type == "object" then (.message // .error // "") else "" end' "$response" 2>/dev/null || true
+    fi
 
     # A timed-out POST may still have stored the file. Check before sending it again.
     attachments=$(list_attachments) || return 1

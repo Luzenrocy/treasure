@@ -54,8 +54,8 @@ jobs:
             # uses the tag without requesting extra permissions for that commit.
             draft=$(gh api --method POST "$api" -f "tag_name=$RELEASE_TAG" \
               -f "name=Treasure $RELEASE_TAG" \
-              -f 'body=Download an installer below, or use the Windows x64 portable ZIP without installation.' \
-              -F draft=true)
+              -f 'body=1.2.1 preview for testing, including Windows startup fixes. The application and installer filenames retain version 1.2.0. Windows users can use the portable ZIP without installation.' \
+              -F draft=true -F prerelease=true)
           fi
           release_id=$(jq -er --arg tag "$RELEASE_TAG" \
             'select(.tag_name == $tag and .draft == true) | .id | numbers' <<<"$draft")
