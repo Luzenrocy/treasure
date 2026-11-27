@@ -310,15 +310,17 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
     :class="{ 'is-windows': isWindows }"
     :style="{ '--treasure-sidebar-width': isCollapse ? '76px' : '128px' }"
   >
-    <div v-if="startupLoading" class="startup-overlay" role="status" aria-live="polite">
-      <div class="startup-panel">
-        <template v-if="startupError">
-          <p>启动失败，{{ startupError }}</p>
-          <el-button type="primary" @click="loadStartup">重试</el-button>
-        </template>
-        <p v-else>正在启动…</p>
+    <Transition name="startup-fade">
+      <div v-if="startupLoading" class="startup-overlay" role="status" aria-live="polite">
+        <div class="startup-panel">
+          <template v-if="startupError">
+            <p>启动失败，{{ startupError }}</p>
+            <el-button type="primary" @click="loadStartup">重试</el-button>
+          </template>
+          <p v-else>正在启动…</p>
+        </div>
       </div>
-    </div>
+    </Transition>
     <WindowsTitleBar
       v-if="isWindows"
       :menu-groups="windowsApplicationMenu"
@@ -414,6 +416,14 @@ getCacheKey(route: RouteLocationNormalizedLoaded): string {
 </template>
 
 <style lang="scss" scoped>
+.startup-fade-leave-active {
+  transition: opacity 200ms ease;
+}
+
+.startup-fade-leave-to {
+  opacity: 0;
+}
+
 .startup-overlay {
   position: fixed;
   inset: 0;

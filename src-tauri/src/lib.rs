@@ -74,6 +74,8 @@ fn record_startup_ready() {
 }
 #[cfg(windows)]
 mod windows_titlebar;
+#[cfg(any(target_os = "macos", windows))]
+mod startup_window;
 
 fn extract_table_names_recursive(stmt: &Statement) -> HashSet<String> {
     let mut tables = HashSet::new();
@@ -580,12 +582,11 @@ pub fn run() {
                 if let Some(started) = STARTUP_TIME.get() {
                     let _ = PAGE_FINISHED_MS.set(started.elapsed().as_millis() as u64);
                 }
+                #[cfg(any(target_os = "macos", windows))]
+                startup_window::reveal(webview.app_handle());
             }
         })
         .setup(|app| {
-            if let Some(started) = STARTUP_TIME.get() {
-                let _ = WINDOW_CREATED_MS.set(started.elapsed().as_millis() as u64);
-            }
             // 启动时申请 macOS 通知权限
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -609,6 +610,14 @@ pub fn run() {
                 }
             });
             
+            #[cfg(any(target_os = "macos", windows))]
+            startup_window::create(app)?;
+
+            if let Some(started) = STARTUP_TIME.get() {
+                let _ = WINDOW_CREATED_MS.set(started.elapsed().as_millis() as u64);
+            }
+
+            #[cfg(not(any(target_os = "macos", windows)))]
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(windows)]
                 if let Err(error) = windows_titlebar::install(&window) {

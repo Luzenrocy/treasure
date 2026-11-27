@@ -4,6 +4,7 @@
     "windows": [
       {
         "title": "treasure",
+        "create": false,
         "width": 1024,
         "height": 768,
         "decorations": false,
